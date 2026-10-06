@@ -12,7 +12,9 @@ pub use v2::V2Venue;
 pub use v3::V3Venue;
 pub use v4::V4Venue;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum Venue {
     V2,
     V3,
@@ -51,6 +53,14 @@ pub struct V3State {
     pub liquidity: u128,
     pub tick: i32,
     pub fee_pips: u32,
+    /// Bitmap stride of the pool. The swap loop steps the way core's
+    /// `TickBitmap` does — at most one bitmap word per step — which depends
+    /// on the spacing; skipping those boundaries changes rounding.
+    pub tick_spacing: i32,
+    /// Effective swap fee per direction `(zero_for_one, one_for_zero)` when
+    /// it differs by direction (v4 pools combine a per-direction protocol
+    /// fee with the LP fee). `None` means `fee_pips` applies both ways.
+    pub fee_pips_by_dir: Option<(u32, u32)>,
     /// Initialized ticks sorted ascending by tick.
     pub ticks: Vec<TickData>,
     /// True when the tick bitmap walk reached the end of initialized ticks,
@@ -110,8 +120,12 @@ pub trait VenueQuoter: Send + Sync {
     fn venue(&self) -> Venue;
     /// Exact-in quote against cached pool state. `zero_for_one` says whether
     /// token_in is pool token0.
-    fn quote_exact_in(&self, state: &PoolState, zero_for_one: bool, amount_in: U256)
-    -> Result<U256>;
+    fn quote_exact_in(
+        &self,
+        state: &PoolState,
+        zero_for_one: bool,
+        amount_in: U256,
+    ) -> Result<U256>;
     /// Encode one transaction's calldata for an ordered chain of legs of this
     /// venue. `to` receives the output; `deadline` bounds the router call.
     fn encode_exact_in(&self, legs: &[SwapLeg], to: Address, deadline: u64) -> Result<Bytes>;
@@ -167,7 +181,11 @@ pub fn marginal_price_1e18(state: &PoolState, zero_for_one: bool) -> Result<U256
 }
 
 fn ratio_marginal(reserve0: U256, reserve1: U256, zero_for_one: bool) -> Result<U256> {
-    let (ra, rb) = if zero_for_one { (reserve0, reserve1) } else { (reserve1, reserve0) };
+    let (ra, rb) = if zero_for_one {
+        (reserve0, reserve1)
+    } else {
+        (reserve1, reserve0)
+    };
     if ra.is_zero() {
         return Err(EngineError::Quote("marginal: empty reserves".to_string()));
     }

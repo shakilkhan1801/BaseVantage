@@ -1,7 +1,7 @@
-use alloy::primitives::{address, Address, Bytes, U256, U512};
+use alloy::primitives::{Address, Bytes, U256, U512, address};
 
 use crate::error::{EngineError, Result};
-use crate::venues::{mul_div_ceil, mul_div_floor, PoolState, SwapLeg, Venue, VenueQuoter, V3State};
+use crate::venues::{PoolState, SwapLeg, V3State, Venue, VenueQuoter, mul_div_ceil, mul_div_floor};
 
 /// Uniswap V3-style concentrated-liquidity venue.
 pub struct V3Venue;
@@ -33,7 +33,7 @@ pub fn sqrt_ratio_at_tick(tick: i32) -> Result<U256> {
     } else {
         U256::from(1u64) << 128
     };
-      const MULTS: [&str; 19] = [
+    const MULTS: [&str; 19] = [
         "fff97272373d413259a46990580e213a",
         "fff2e50f5f656932ef12357cf3c7fdcc",
         "ffe5caca7e10e4e61c3624eaa0941cd0",
@@ -73,11 +73,7 @@ pub fn sqrt_ratio_at_tick(tick: i32) -> Result<U256> {
 }
 
 fn ordered(a: U256, b: U256) -> (U256, U256) {
-    if a <= b {
-        (a, b)
-    } else {
-        (b, a)
-    }
+    if a <= b { (a, b) } else { (b, a) }
 }
 
 fn div_round(num: U512, den: U512, round_up: bool) -> Result<U256> {
@@ -126,7 +122,9 @@ pub fn next_sqrt_price_from_input(
     zero_for_one: bool,
 ) -> Result<U256> {
     if sqrt_price.is_zero() || liquidity == 0 {
-        return Err(EngineError::Quote("v3: zero liquidity or price".to_string()));
+        return Err(EngineError::Quote(
+            "v3: zero liquidity or price".to_string(),
+        ));
     }
     if zero_for_one {
         // amount0 in: sqrt' = ceil( (L<<96) * sqrt / ((L<<96) + amountIn*sqrt) )
@@ -163,8 +161,8 @@ pub fn compute_swap_step(
 ) -> Result<SwapStep> {
     let zero_for_one = sqrt_current >= sqrt_target;
     let fee_scale = U256::from(FEE_DEN - u64::from(fee_pips));
-    let remaining_less_fee =
-        mul_div_ceil(amount_remaining, fee_scale, U256::from(FEE_DEN))?;
+    // Core: `FullMath.mulDiv(amountRemaining, 1e6 - feePips, 1e6)` — floor.
+    let remaining_less_fee = mul_div_floor(amount_remaining, fee_scale, U256::from(FEE_DEN))?;
 
     let amount_in_to_target = if zero_for_one {
         amount0_delta(sqrt_target, sqrt_current, liquidity, true)?
@@ -193,7 +191,12 @@ pub fn compute_swap_step(
         mul_div_ceil(amount_in, U256::from(fee_pips), fee_scale)?
     };
 
-    Ok(SwapStep { sqrt_price_next: sqrt_next, amount_in, amount_out, fee_amount })
+    Ok(SwapStep {
+        sqrt_price_next: sqrt_next,
+        amount_in,
+        amount_out,
+        fee_amount,
+    })
 }
 
 fn add_delta(liquidity: u128, delta: i128) -> Result<u128> {
@@ -222,13 +225,58 @@ pub fn next_initialized_tick(
             .find(|t| t.tick <= tick)
             .map(|t| (t.tick, t.liquidity_net))
     } else {
-        ticks.iter().find(|t| t.tick > tick).map(|t| (t.tick, t.liquidity_net))
+        ticks
+            .iter()
+            .find(|t| t.tick > tick)
+            .map(|t| (t.tick, t.liquidity_net))
     }
 }
 
-/// Exact-in quote across initialized ticks (the v3 swap loop). Refuses rather
-/// than approximates when the loaded tick depth would be exhausted mid-swap
-/// and the tick set is not marked complete.
+/// Core's `TickBitmap.nextInitializedTickWithinOneWord` over a pre-loaded tick
+/// list: the next initialized tick at most one bitmap word away in the swap
+/// direction (the current position included when searching down), or the far
+/// edge of that word when it holds no initialized tick. Stepping word by word
+/// exactly like core matters: the swap charges and rounds per step, so a
+/// coarser step sequence drifts from the chain's amounts.
+pub fn next_tick_within_one_word(
+    ticks: &[crate::venues::TickData],
+    tick: i32,
+    spacing: i32,
+    zero_for_one: bool,
+) -> (i32, Option<i128>) {
+    let sp = i64::from(spacing.max(1));
+    let compressed = i64::from(tick).div_euclid(sp);
+    if zero_for_one {
+        let bit_pos = compressed & 0xff;
+        let word_start = compressed - bit_pos;
+        let found = ticks
+            .iter()
+            .rev()
+            .map(|t| (t, i64::from(t.tick).div_euclid(sp)))
+            .find(|(_, c)| *c <= compressed && *c >= word_start);
+        match found {
+            Some((t, _)) => (t.tick, Some(t.liquidity_net)),
+            None => ((word_start * sp) as i32, None),
+        }
+    } else {
+        let up = compressed + 1;
+        let bit_pos = up & 0xff;
+        let word_end = up + (255 - bit_pos);
+        let found = ticks
+            .iter()
+            .map(|t| (t, i64::from(t.tick).div_euclid(sp)))
+            .find(|(_, c)| *c >= up && *c <= word_end);
+        match found {
+            Some((t, _)) => (t.tick, Some(t.liquidity_net)),
+            None => ((word_end * sp) as i32, None),
+        }
+    }
+}
+
+/// Exact-in quote across initialized ticks (the v3 swap loop, stepping one
+/// bitmap word at a time like core). Refuses rather than approximates when
+/// the loaded tick depth would be exhausted mid-swap and the tick set is not
+/// marked complete, or when the input cannot be filled before the price limit.
 pub fn quote_exact_in_state(state: &V3State, zero_for_one: bool, amount_in: U256) -> Result<U256> {
     if amount_in.is_zero() {
         return Ok(U256::ZERO);
@@ -236,7 +284,21 @@ pub fn quote_exact_in_state(state: &V3State, zero_for_one: bool, amount_in: U256
     if state.liquidity == 0 {
         return Err(EngineError::Quote("v3: zero active liquidity".to_string()));
     }
-    let limit = if zero_for_one { MIN_SQRT_RATIO } else { MAX_SQRT_RATIO };
+    let limit = if zero_for_one {
+        MIN_SQRT_RATIO
+    } else {
+        MAX_SQRT_RATIO
+    };
+    let fee_pips = match state.fee_pips_by_dir {
+        Some((zfo, ofz)) => {
+            if zero_for_one {
+                zfo
+            } else {
+                ofz
+            }
+        }
+        None => state.fee_pips,
+    };
     let mut sqrt_price = state.sqrt_price_x96;
     let mut liquidity = state.liquidity;
     let mut tick = state.tick;
@@ -244,40 +306,51 @@ pub fn quote_exact_in_state(state: &V3State, zero_for_one: bool, amount_in: U256
     let mut out_total = U256::ZERO;
 
     while remaining > U256::ZERO && sqrt_price != limit {
-        let next_tick = next_initialized_tick(&state.ticks, tick, zero_for_one);
-        let (sqrt_next_raw, liquidity_net) = match next_tick {
-            Some((t, net)) => (sqrt_ratio_at_tick(t)?, Some((t, net))),
-            None => (limit, None),
-        };
+        let (mut next_t, liquidity_net) =
+            next_tick_within_one_word(&state.ticks, tick, state.tick_spacing, zero_for_one);
+        next_t = next_t.clamp(MIN_TICK, MAX_TICK);
+        let sqrt_next_raw = sqrt_ratio_at_tick(next_t)?;
         let sqrt_target = if zero_for_one {
             sqrt_next_raw.max(limit)
         } else {
             sqrt_next_raw.min(limit)
         };
 
-        let step = compute_swap_step(sqrt_price, sqrt_target, liquidity, remaining, state.fee_pips)?;
+        let step = compute_swap_step(sqrt_price, sqrt_target, liquidity, remaining, fee_pips)?;
         remaining = remaining.saturating_sub(step.amount_in + step.fee_amount);
         out_total += step.amount_out;
         sqrt_price = step.sqrt_price_next;
 
-        match liquidity_net {
-            Some((t, net)) if sqrt_price == sqrt_next_raw => {
+        if sqrt_price == sqrt_next_raw {
+            if let Some(net) = liquidity_net {
                 liquidity = add_delta(liquidity, if zero_for_one { -net } else { net })?;
-                tick = if zero_for_one { t - 1 } else { t };
-            }
-            Some(_) => break, // input exhausted inside the range
-            None => {
-                              if remaining > U256::ZERO && !state.ticks_complete {
+            } else if remaining > U256::ZERO && !state.ticks_complete {
+                // Landing on an uninitialized word boundary is normal core
+                // behaviour — keep stepping. Refuse only when the loaded tick
+                // set ends here and the input still needs crossing.
+                let has_more = if zero_for_one {
+                    state.ticks.iter().any(|t| t.tick < next_t)
+                } else {
+                    state.ticks.iter().any(|t| t.tick > next_t)
+                };
+                if !has_more {
                     return Err(EngineError::Quote(
                         "v3: tick depth exhausted — reload state with more initialized ticks"
                             .to_string(),
                     ));
                 }
-                break;
             }
+            tick = if zero_for_one { next_t - 1 } else { next_t };
+        } else {
+            break; // input exhausted inside the range
         }
     }
 
+    if remaining > U256::ZERO {
+        return Err(EngineError::Quote(
+            "v3: not enough liquidity to fill the input".to_string(),
+        ));
+    }
     Ok(out_total)
 }
 
@@ -385,7 +458,7 @@ pub fn encode_exact_input(path: Bytes, to: Address, amount_in: U256, min_out: U2
     out.extend_from_slice(&amount_in.to_be_bytes::<32>());
     out.extend_from_slice(&min_out.to_be_bytes::<32>());
     // Tuple tail: bytes
-    let padded = (path.len() + 31) / 32 * 32;
+    let padded = path.len().div_ceil(32) * 32;
     out.extend_from_slice(&U256::from(path.len()).to_be_bytes::<32>());
     let mut data = path.to_vec();
     data.resize(padded, 0);

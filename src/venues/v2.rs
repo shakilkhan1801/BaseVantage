@@ -1,4 +1,4 @@
-use alloy::primitives::{address, Address, Bytes, U256, U512};
+use alloy::primitives::{Address, Bytes, U256, U512, address};
 
 use crate::error::{EngineError, Result};
 use crate::venues::{PoolState, SwapLeg, Venue, VenueQuoter};
@@ -16,7 +16,12 @@ pub const DEFAULT_FEE_BPS: u32 = 30;
 impl V2Venue {
     /// Core invariant: out = floor(in_eff * reserveOut / (reserveIn + in_eff))
     /// with in_eff = in * (10000 - fee_bps).
-    pub fn amount_out(reserve_in: U256, reserve_out: U256, amount_in: U256, fee_bps: u32) -> Result<U256> {
+    pub fn amount_out(
+        reserve_in: U256,
+        reserve_out: U256,
+        amount_in: U256,
+        fee_bps: u32,
+    ) -> Result<U256> {
         if reserve_in.is_zero() || reserve_out.is_zero() {
             return Err(EngineError::Quote("v2: empty reserves".to_string()));
         }
@@ -76,7 +81,9 @@ impl VenueQuoter for V2Venue {
         let mut path: Vec<Address> = vec![legs[0].token_in];
         path.extend(legs.iter().map(|l| l.token_out));
 
-        Ok(encode_swap_exact_tokens_for_tokens(amount_in, min_out, &path, to, deadline))
+        Ok(encode_swap_exact_tokens_for_tokens(
+            amount_in, min_out, &path, to, deadline,
+        ))
     }
 }
 

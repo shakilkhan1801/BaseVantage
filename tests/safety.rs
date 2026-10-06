@@ -18,7 +18,10 @@ fn tokens(n: u64) -> U256 {
 
 /// Price in thousandths of a settlement unit per token (2000 = 2.0).
 fn anchor(kind: AnchorKind, per_mille: u64) -> FloorAnchor {
-    FloorAnchor { kind, price_1e18: U256::from(per_mille) * U256::from(E18) / U256::from(1000) }
+    FloorAnchor {
+        kind,
+        price_1e18: U256::from(per_mille) * U256::from(E18) / U256::from(1000),
+    }
 }
 
 fn assessment(sell_tax_bps: u32, honeypot: bool, fot: bool) -> TokenAssessment {
@@ -40,7 +43,10 @@ fn floor_reference_anchor_worse_fill_reverts() {
     let result = floor
         .min_out(
             tokens(1000),
-            &[anchor(AnchorKind::Reference, 2000), anchor(AnchorKind::Swap, 1800)],
+            &[
+                anchor(AnchorKind::Reference, 2000),
+                anchor(AnchorKind::Swap, 1800),
+            ],
         )
         .unwrap();
     let reference_floor = tokens(1990);
@@ -57,7 +63,13 @@ fn floor_swap_anchor_worse_fill_reverts() {
     let floor = FloorModule::new(0.5);
     // SWAP 2.2 binds over REFERENCE 2.0 => min-out = 2189 (2.2 - 0.5%).
     let result = floor
-        .min_out(tokens(1000), &[anchor(AnchorKind::Reference, 2000), anchor(AnchorKind::Swap, 2200)])
+        .min_out(
+            tokens(1000),
+            &[
+                anchor(AnchorKind::Reference, 2000),
+                anchor(AnchorKind::Swap, 2200),
+            ],
+        )
         .unwrap();
     assert_eq!(result.min_out, tokens(2189));
 
@@ -97,7 +109,11 @@ fn target_order_floor_never_below_target() {
         );
         assert_eq!(result.min_out, target_floor);
         // Target is never reduced by tolerance.
-        let tq = result.quotes.iter().find(|q| q.kind == AnchorKind::Target).unwrap();
+        let tq = result
+            .quotes
+            .iter()
+            .find(|q| q.kind == AnchorKind::Target)
+            .unwrap();
         assert!(!tq.reduced_by_tolerance);
     }
 

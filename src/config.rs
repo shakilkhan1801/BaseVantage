@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use alloy::primitives::Address;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{checksum_ok, ConfigViolation, EngineError, Result};
+use crate::error::{ConfigViolation, EngineError, Result, checksum_ok};
 
 /// Effective engine mode. `observe` never sends transactions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,8 +98,8 @@ impl Config {
     }
 
     pub fn from_toml_str(text: &str) -> Result<Self> {
-        let cfg: Config = toml::from_str(text)
-            .map_err(|e| EngineError::Config(format!("schema error: {e}")))?;
+        let cfg: Config =
+            toml::from_str(text).map_err(|e| EngineError::Config(format!("schema error: {e}")))?;
         let violations = cfg.validate();
         if violations.is_empty() {
             Ok(cfg)
@@ -127,7 +127,7 @@ impl Config {
             } else if !checksum_ok(addr) {
                 v.push(ConfigViolation::new(key, "address is not checksummed"));
             }
-                  }
+        }
         if self.engine.settlement_asset == self.engine.wrapped_native {
             v.push(ConfigViolation::new(
                 "engine.settlement_asset",
@@ -136,20 +136,32 @@ impl Config {
         }
 
         if self.rpc.urls.is_empty() {
-            v.push(ConfigViolation::new("rpc.urls", "at least one HTTP RPC url required"));
+            v.push(ConfigViolation::new(
+                "rpc.urls",
+                "at least one HTTP RPC url required",
+            ));
         }
         for (i, url) in self.rpc.urls.iter().enumerate() {
             if !(url.starts_with("http://") || url.starts_with("https://")) {
-                v.push(ConfigViolation::new(format!("rpc.urls[{i}]"), "must be http(s)"));
+                v.push(ConfigViolation::new(
+                    format!("rpc.urls[{i}]"),
+                    "must be http(s)",
+                ));
             }
         }
         for (i, url) in self.rpc.ws_urls.iter().enumerate() {
             if !(url.starts_with("ws://") || url.starts_with("wss://")) {
-                v.push(ConfigViolation::new(format!("rpc.ws_urls[{i}]"), "must be ws(s)"));
+                v.push(ConfigViolation::new(
+                    format!("rpc.ws_urls[{i}]"),
+                    "must be ws(s)",
+                ));
             }
         }
         if self.rpc.bench_interval_secs == 0 {
-            v.push(ConfigViolation::new("rpc.bench_interval_secs", "must be > 0"));
+            v.push(ConfigViolation::new(
+                "rpc.bench_interval_secs",
+                "must be > 0",
+            ));
         }
 
         for (key, ttl) in [
@@ -163,17 +175,29 @@ impl Config {
             }
         }
         if self.cache.static_store_path.as_os_str().is_empty() {
-            v.push(ConfigViolation::new("cache.static_store_path", "must not be empty"));
+            v.push(ConfigViolation::new(
+                "cache.static_store_path",
+                "must not be empty",
+            ));
         }
 
-          if !(0.0..=100.0).contains(&self.safety.impact_cap_pct) {
-            v.push(ConfigViolation::new("safety.impact_cap_pct", "must be within 0..=100"));
+        if !(0.0..=100.0).contains(&self.safety.impact_cap_pct) {
+            v.push(ConfigViolation::new(
+                "safety.impact_cap_pct",
+                "must be within 0..=100",
+            ));
         }
         if !(0.0..=100.0).contains(&self.safety.floor_tolerance_pct) {
-            v.push(ConfigViolation::new("safety.floor_tolerance_pct", "must be within 0..=100"));
+            v.push(ConfigViolation::new(
+                "safety.floor_tolerance_pct",
+                "must be within 0..=100",
+            ));
         }
         if !(0.0..=100.0).contains(&self.safety.max_sell_tax_pct) {
-            v.push(ConfigViolation::new("safety.max_sell_tax_pct", "must be within 0..=100"));
+            v.push(ConfigViolation::new(
+                "safety.max_sell_tax_pct",
+                "must be within 0..=100",
+            ));
         }
         if self.safety.fot_multihop_v3 != "refuse" {
             v.push(ConfigViolation::new(
@@ -186,11 +210,17 @@ impl Config {
             v.push(ConfigViolation::new("watchlist.cap", "must be > 0"));
         }
         if self.watchlist.store_path.as_os_str().is_empty() {
-            v.push(ConfigViolation::new("watchlist.store_path", "must not be empty"));
+            v.push(ConfigViolation::new(
+                "watchlist.store_path",
+                "must not be empty",
+            ));
         }
 
         if self.settlement.pin_max_age_secs == 0 {
-            v.push(ConfigViolation::new("settlement.pin_max_age_secs", "must be > 0"));
+            v.push(ConfigViolation::new(
+                "settlement.pin_max_age_secs",
+                "must be > 0",
+            ));
         }
 
         v

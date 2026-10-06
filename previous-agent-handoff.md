@@ -226,15 +226,21 @@ the final planned batch was never applied (credits ran out).
 
 ## 8. Remaining work to legitimately declare "S1 complete"
 
+**UPDATE (2026-10-06, second pass): all six items are now done.**
+
 1. ~~Re-add `src/lib.rs` (and ideally `config.example.toml`, `README.md`, `.gitignore`,
    the corrected `docs/S1-DESIGN.md`)~~ — **done 2026-10-06**, see §5.
-2. Apply the 22 clippy fixes from §6 (most are mechanical), then
-   `cargo clippy --all-targets -- -D warnings` clean.
-3. `cargo fmt` and commit the result.
-4. Re-run the fork suite with a real `BASE_RPC_URL` (a private/less rate-limited
-   endpoint) and `anvil` (foundry) installed — get all 6 green.
-5. Consider the 429 backoff in `RpcPool` (the rate-limit failure mode is real).
-6. Write the S1 report (files, tests+counts, charter conflicts flagged) and end with
+2. ~~Apply the 22 clippy fixes~~ — done; `cargo clippy --all-targets -- -D warnings` is clean.
+3. ~~`cargo fmt`~~ — done; `cargo fmt --check` is clean.
+4. ~~Re-run the fork suite~~ — done; **6/6 green against Base mainnet** (public
+   pooled endpoints + anvil). This pass also fixed five real engine/test defects
+   found by the live suite: `remaining_less_fee` rounding (floor, not ceil — the
+   v3 quote now equals QuoterV2 exactly), core-faithful one-word tick stepping,
+   the v4 Universal Router action codes + single-value param encoding, the v4
+   combined protocol+LP swap fee, and per-direction fee handling. See
+   `docs/S1-REPORT.md`.
+5. ~~429 backoff in `RpcPool`~~ — done, with `tests/chain.rs` proving it.
+6. ~~S1 report~~ — done: `docs/S1-REPORT.md`, ending with
    "S1 complete — awaiting approval for S2."
 
 ## 9. Planned after S1 (from the instructions and the agent's notes, not yet started)

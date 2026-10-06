@@ -1,7 +1,7 @@
-use alloy::primitives::{address, Address, Bytes, U256};
+use alloy::primitives::{Address, Bytes, U256, address};
 
 use crate::error::{EngineError, Result};
-use crate::venues::{PoolState, SwapLeg, Venue, VenueQuoter, AeroState};
+use crate::venues::{AeroState, PoolState, SwapLeg, Venue, VenueQuoter};
 
 /// Aerodrome (Solidly-style) venue: volatile constant-product and stable
 /// `x³y + y³x >= k` pools.
@@ -54,7 +54,7 @@ fn get_y(x0: U256, xy: U256, y0: U256) -> Result<U256> {
                 }
                 dy = U256::from(1);
             }
-            y = y + dy;
+            y += dy;
         } else {
             let mut dy = ((fy - xy) * E18) / d(x0, y)?;
             if dy.is_zero() {
@@ -63,10 +63,12 @@ fn get_y(x0: U256, xy: U256, y0: U256) -> Result<U256> {
                 }
                 dy = U256::from(1);
             }
-            y = y - dy;
+            y -= dy;
         }
     }
-    Err(EngineError::Quote("aerodrome: _get_y did not converge".to_string()))
+    Err(EngineError::Quote(
+        "aerodrome: _get_y did not converge".to_string(),
+    ))
 }
 
 impl AerodromeVenue {
@@ -81,8 +83,11 @@ impl AerodromeVenue {
             let xy = k(state)?;
             let r0n = (state.reserve0 * E18) / pow10(state.decimals0);
             let r1n = (state.reserve1 * E18) / pow10(state.decimals1);
-            let (reserve_a, reserve_b) =
-                if token_in_is_zero { (r0n, r1n) } else { (r1n, r0n) };
+            let (reserve_a, reserve_b) = if token_in_is_zero {
+                (r0n, r1n)
+            } else {
+                (r1n, r0n)
+            };
             let amount_in_n = (amount_in * E18) / pow10(dec_in);
             let y = reserve_b
                 .checked_sub(get_y(amount_in_n + reserve_a, xy, reserve_b)?)
@@ -127,7 +132,11 @@ impl VenueQuoter for AerodromeVenue {
     ) -> Result<U256> {
         let s = match state {
             PoolState::Aero(s) => s,
-            _ => return Err(EngineError::Quote("aerodrome: wrong pool state".to_string())),
+            _ => {
+                return Err(EngineError::Quote(
+                    "aerodrome: wrong pool state".to_string(),
+                ));
+            }
         };
         Self::quote_with_fee(s, zero_for_one, amount_in)
     }
@@ -143,7 +152,7 @@ impl VenueQuoter for AerodromeVenue {
                 ));
             }
         }
-              let amount_in = legs[0].amount_in;
+        let amount_in = legs[0].amount_in;
         let min_out = legs[legs.len() - 1].min_out;
         let routes: Vec<AeroRoute> = legs
             .iter()
@@ -181,7 +190,7 @@ pub fn encode_swap_exact_tokens_for_tokens(
         "swapExactTokensForTokens(uint256,uint256,(address,address,bool,address)[],address,uint256)",
     )[0..4]
         .to_vec();
-      let mut out = selector;
+    let mut out = selector;
     out.extend_from_slice(&amount_in.to_be_bytes::<32>());
     out.extend_from_slice(&min_out.to_be_bytes::<32>());
     out.extend_from_slice(&U256::from(5 * 32).to_be_bytes::<32>()); // routes offset

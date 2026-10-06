@@ -5,12 +5,12 @@ use alloy::primitives::{Address, U256};
 pub mod quote;
 pub mod route;
 
-pub use quote::{impact_pct, net_out, normalize, NetInputs, PinnedQuote, Quote};
-pub use route::{candidate_routes, require_hops, Hop, Route};
+pub use quote::{NetInputs, PinnedQuote, Quote, impact_pct, net_out, normalize};
+pub use route::{Hop, Route, candidate_routes, require_hops};
 
 use crate::error::{EngineError, Result};
 use crate::market::{Labeled, MarketData};
-use crate::venues::{marginal_price_1e18, PoolState as VenueState, VenueQuoter};
+use crate::venues::{PoolState as VenueState, VenueQuoter, marginal_price_1e18};
 
 /// A candidate route plus its quote outcome (or refusal reason).
 #[derive(Debug)]
@@ -39,7 +39,11 @@ pub struct Router {
 }
 
 impl Router {
-    pub fn new(market: Arc<MarketData>, settlement_asset: Address, wrapped_native: Address) -> Self {
+    pub fn new(
+        market: Arc<MarketData>,
+        settlement_asset: Address,
+        wrapped_native: Address,
+    ) -> Self {
         Self {
             market,
             settlement_asset,
@@ -67,13 +71,15 @@ impl Router {
             pools.extend(hit.value.iter().cloned());
         }
         for hub in &self.hubs {
-            if let Some(hit) = self.market.pools_for(*hub, &[self.settlement_asset]).await? {
+            if let Some(hit) = self
+                .market
+                .pools_for(*hub, &[self.settlement_asset])
+                .await?
+            {
                 pools.extend(hit.value.iter().cloned());
             }
         }
-        pools.sort_by(|a, b| {
-            (a.venue, a.address, a.fee).cmp(&(b.venue, b.address, b.fee))
-        });
+        pools.sort_by_key(|a| (a.venue, a.address, a.fee));
         pools.dedup_by(|a, b| a == b);
         Ok(pools)
     }
@@ -102,11 +108,10 @@ impl Router {
 
         for i in 0..route.hops.len() {
             let hop = &route.hops[i];
-            let state_hit: Labeled<crate::venues::PoolState> = self
-                .market
-                .pool_state(&hop.pool)
-                .await?
-                .ok_or_else(|| EngineError::Quote(format!("no state for pool {}", hop.pool.label())))?;
+            let state_hit: Labeled<crate::venues::PoolState> =
+                self.market.pool_state(&hop.pool).await?.ok_or_else(|| {
+                    EngineError::Quote(format!("no state for pool {}", hop.pool.label()))
+                })?;
             labels.push(state_hit.label());
             let state: &VenueState = &state_hit.value;
             let zero_for_one = hop.pool.zero_for_one(hop.token_in);
@@ -126,7 +131,8 @@ impl Router {
         let quote_asset = last.token_out;
         // Each extra hop costs real gas; multi-hop must not look free.
         let route_net = NetInputs {
-            gas_units: net.gas_units + U256::from(50_000) * U256::from(route.hops.len().saturating_sub(1)),
+            gas_units: net.gas_units
+                + U256::from(50_000) * U256::from(route.hops.len().saturating_sub(1)),
             ..net.clone()
         };
         let (normalized, tax, gas_in_settle, net_value) = net_out(
@@ -139,7 +145,7 @@ impl Router {
         )?;
         let impact = impact_pct(spot_out, gross_out);
 
-          Ok(Quote {
+        Ok(Quote {
             route,
             gross_out,
             quote_asset,
@@ -157,11 +163,19 @@ impl Router {
     }
 
     /// Quote every candidate, keeping refusals with their reason.
-    pub async fn quotes(&self, sell: Address, amount_in: U256, net: &NetInputs) -> Result<Vec<RouteOutcome>> {
+    pub async fn quotes(
+        &self,
+        sell: Address,
+        amount_in: U256,
+        net: &NetInputs,
+    ) -> Result<Vec<RouteOutcome>> {
         let candidates = self.candidates(sell, amount_in).await?;
         let mut outcomes = Vec::with_capacity(candidates.len());
         for route in candidates {
-            let outcome = self.quote_route(&route, net).await.map_err(|e| e.to_string());
+            let outcome = self
+                .quote_route(&route, net)
+                .await
+                .map_err(|e| e.to_string());
             outcomes.push(RouteOutcome { route, outcome });
         }
         Ok(outcomes)

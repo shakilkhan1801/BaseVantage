@@ -1,17 +1,17 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use alloy::primitives::{address, keccak256, Address, Bytes, B256, U256};
+use alloy::primitives::{Address, B256, Bytes, U256, address, keccak256};
 use alloy::rpc::types::state::{AccountOverride, StateOverride};
 use alloy::sol_types::SolCall;
 use async_trait::async_trait;
 
 use crate::chain::{CallRequest, DynChain};
 use crate::error::{EngineError, Result};
+use crate::market::PoolKey;
 use crate::market::abi::{
     IAerodromePool, IAerodromeRouter, IERC20, IMulticall3, IQuoterV2, IUniswapV2Router02,
 };
-use crate::market::PoolKey;
 use crate::venues::Venue;
 
 /// Multicall3: executes several calls in one eth_call, which is what makes
@@ -64,7 +64,10 @@ impl ManualAssessor {
     }
 
     pub fn insert(&self, assessment: TokenAssessment) {
-        self.entries.lock().expect("poisoned").insert(assessment.token, assessment);
+        self.entries
+            .lock()
+            .expect("poisoned")
+            .insert(assessment.token, assessment);
     }
 }
 
@@ -126,8 +129,13 @@ impl ProbeAssessor {
         }
         Ok(None)
     }
-  
-      async fn call_with(&self, to: Address, data: Vec<u8>, overrides: StateOverride) -> Result<Bytes> {
+
+    async fn call_with(
+        &self,
+        to: Address,
+        data: Vec<u8>,
+        overrides: StateOverride,
+    ) -> Result<Bytes> {
         self.chain
             .call(CallRequest {
                 to: Some(to),
@@ -153,9 +161,21 @@ impl ProbeAssessor {
         let balance_after = IERC20::balanceOfCall { owner: MULTICALL3 }.abi_encode();
 
         let calls = vec![
-            IMulticall3::Call3 { allowFailure: true, target: quote_call.0, callData: Bytes::from(quote_call.1) },
-            IMulticall3::Call3 { allowFailure: true, target: swap_call.0, callData: Bytes::from(swap_call.1) },
-            IMulticall3::Call3 { allowFailure: true, target: output, callData: Bytes::from(balance_after) },
+            IMulticall3::Call3 {
+                allowFailure: true,
+                target: quote_call.0,
+                callData: Bytes::from(quote_call.1),
+            },
+            IMulticall3::Call3 {
+                allowFailure: true,
+                target: swap_call.0,
+                callData: Bytes::from(swap_call.1),
+            },
+            IMulticall3::Call3 {
+                allowFailure: true,
+                target: output,
+                callData: Bytes::from(balance_after),
+            },
         ];
         let data = IMulticall3::aggregate3Call { calls }.abi_encode();
 
@@ -169,18 +189,22 @@ impl ProbeAssessor {
             .discover_allowance_slot(input, MULTICALL3, swap_router_for(pool))
             .await?
             .ok_or_else(|| EngineError::Rpc("probe: allowance slot not found".to_string()))?;
-        let mut state = Vec::new();
-        state.push((mapping_slot_key_1(MULTICALL3, bal_slot), word_u256(amount_in)));
-        state.push((
-            mapping_slot_key_2(MULTICALL3, swap_router_for(pool), allow_slot),
-            word_u256(U256::MAX),
-        ));
+        let state = vec![
+            (
+                mapping_slot_key_1(MULTICALL3, bal_slot),
+                word_u256(amount_in),
+            ),
+            (
+                mapping_slot_key_2(MULTICALL3, swap_router_for(pool), allow_slot),
+                word_u256(U256::MAX),
+            ),
+        ];
         let mut overrides = StateOverride::default();
         let mut input_account = AccountOverride::default();
         input_account.set_state_diff(state);
         overrides.insert(input, input_account);
 
-          let out = self
+        let out = self
             .chain
             .call(CallRequest {
                 to: Some(MULTICALL3),
@@ -192,7 +216,9 @@ impl ProbeAssessor {
         let results = IMulticall3::aggregate3Call::abi_decode_returns(&out)
             .map_err(|e| EngineError::Rpc(e.to_string()))?;
         if results.len() != 3 {
-            return Err(EngineError::Rpc("probe: unexpected aggregate3 shape".to_string()));
+            return Err(EngineError::Rpc(
+                "probe: unexpected aggregate3 shape".to_string(),
+            ));
         }
         let quoted = if results[0].success {
             u256_from_word_word(&results[0].returnData)
@@ -205,7 +231,11 @@ impl ProbeAssessor {
         } else {
             U256::ZERO
         };
-        Ok(ProbeOutcome { quoted, swap_ok, received })
+        Ok(ProbeOutcome {
+            quoted,
+            swap_ok,
+            received,
+        })
     }
 
     /// Assess via the best probeable pool (v2 first, then aerodrome, then v3).
@@ -222,7 +252,7 @@ impl ProbeAssessor {
         let sell_amount = U256::from(10u64).pow(U256::from(decimals));
         let buy_amount = U256::from(10).pow(U256::from(16)); // 0.01 WETH
 
-          let sell = self.probe(&pool, token, other, sell_amount, true).await?;
+        let sell = self.probe(&pool, token, other, sell_amount, true).await?;
         let buy = self.probe(&pool, other, token, buy_amount, false).await;
 
         let sell_tax_bps = tax_bps(sell.quoted, sell.received);
@@ -262,7 +292,9 @@ fn tax_bps(quoted: U256, received: U256) -> u32 {
         return 0;
     }
     let diff = quoted - received;
-    ((diff * U256::from(10_000)) / quoted).to::<u64>().min(10_000) as u32
+    ((diff * U256::from(10_000)) / quoted)
+        .to::<u64>()
+        .min(10_000) as u32
 }
 
 fn pick_probe_pool(token: Address, pools: &[PoolKey]) -> Option<PoolKey> {
@@ -289,17 +321,23 @@ fn swap_router_for(pool: &PoolKey) -> Address {
 }
 
 /// (target, calldata) for the quote and swap sub-calls of one probe.
+type CallData = (Address, Vec<u8>);
+
 fn build_probe_calls(
     pool: &PoolKey,
     input: Address,
     output: Address,
     amount_in: U256,
-) -> Result<((Address, Vec<u8>), (Address, Vec<u8>))> {
+) -> Result<(CallData, CallData)> {
     let deadline = u64::MAX;
     match pool.venue {
         Venue::V2 => {
             let path = vec![input, output];
-            let quote = IUniswapV2Router02::getAmountsOutCall { amountIn: amount_in, path }.abi_encode();
+            let quote = IUniswapV2Router02::getAmountsOutCall {
+                amountIn: amount_in,
+                path,
+            }
+            .abi_encode();
             let swap = IUniswapV2Router02::swapExactTokensForTokensCall {
                 amountIn: amount_in,
                 amountOutMin: U256::ZERO,
@@ -310,7 +348,7 @@ fn build_probe_calls(
             .abi_encode();
             Ok(((V2_ROUTER, quote), (V2_ROUTER, swap)))
         }
-              Venue::Aerodrome => {
+        Venue::Aerodrome => {
             let quote = IAerodromePool::getAmountOutCall {
                 amountIn: amount_in,
                 tokenIn: input,
@@ -351,7 +389,9 @@ fn build_probe_calls(
             );
             Ok(((V3_QUOTER, quote), (V3_ROUTER, single.to_vec())))
         }
-        Venue::V4 => Err(EngineError::Rpc("probe: v4 pools not probeable in S1".to_string())),
+        Venue::V4 => Err(EngineError::Rpc(
+            "probe: v4 pools not probeable in S1".to_string(),
+        )),
     }
 }
 

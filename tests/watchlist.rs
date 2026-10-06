@@ -29,7 +29,10 @@ fn enrol_persists_with_provenance() {
             assert_eq!(e.provenance, Provenance::Manual);
             assert_eq!(e.symbol, "AAA");
         }
-        other => panic!("expected enrolment, got {:?}", std::mem::discriminant(&other)),
+        other => panic!(
+            "expected enrolment, got {:?}",
+            std::mem::discriminant(&other)
+        ),
     }
     match list2.enrol(addr(0x02), "BBB", Provenance::Auto) {
         EnrolOutcome::Enrolled(e) => assert_eq!(e.provenance, Provenance::Auto),
@@ -75,8 +78,14 @@ fn symbol_collision_refused() {
         EnrolOutcome::Refused(card) => {
             let rendered = card.render();
             assert!(rendered.contains("symbol collision"), "{rendered}");
-            assert!(rendered.contains("0x01"), "must name the existing address: {rendered}");
-            assert!(rendered.contains("0x02"), "must name the refused address: {rendered}");
+            assert!(
+                rendered.contains("0x01"),
+                "must name the existing address: {rendered}"
+            );
+            assert!(
+                rendered.contains("0x02"),
+                "must name the refused address: {rendered}"
+            );
         }
         EnrolOutcome::Enrolled(_) => panic!("symbol collision must be refused"),
     }
@@ -120,7 +129,11 @@ fn manual_remove_only_bot_never_auto_removes() {
     let seen = list.sweep_annotate("refreshed by bot");
     assert_eq!(seen, 3);
     assert_eq!(list.len(), 3, "bot pass must not remove entries");
-    assert!(list.list().iter().all(|e| e.note.as_deref() == Some("refreshed by bot")));
+    assert!(
+        list.list()
+            .iter()
+            .all(|e| e.note.as_deref() == Some("refreshed by bot"))
+    );
 
     // A second automatic pass still removes nothing.
     list.sweep_annotate("second pass");

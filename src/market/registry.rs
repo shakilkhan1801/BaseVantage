@@ -1,16 +1,18 @@
-use alloy::primitives::aliases::{I24, U24};
 use alloy::primitives::Bytes;
-use alloy::primitives::{Address, Uint, U256, B256};
+use alloy::primitives::aliases::{I24, U24};
+use alloy::primitives::{Address, B256, U256, Uint};
 use alloy::sol_types::SolCall;
 
 use crate::chain::DynChain;
 use crate::error::{EngineError, Result};
 use crate::market::abi::{
-    IAerodromeFactory, IAerodromePool, IExtsloadMany, IUniswapV2Factory, IUniswapV2Pair,
+    IAerodromeFactory, IAerodromePool, IERC20, IExtsloadMany, IUniswapV2Factory, IUniswapV2Pair,
     IUniswapV3Factory, IUniswapV3Pool,
 };
 use crate::market::{PoolKey, PoolMeta};
-use crate::venues::v4::{decode_slot0, decode_tick_info, pool_state_slot, tick_bitmap_slot, tick_slot};
+use crate::venues::v4::{
+    decode_slot0, decode_tick_info, pool_state_slot, tick_bitmap_slot, tick_slot,
+};
 use crate::venues::{AeroState, PoolState, TickData, V2State, V3State, V4State, Venue};
 
 /// Fee tiers queried on discovery (v3 and v4).
@@ -71,7 +73,11 @@ impl Registry {
     {
         let out = self
             .chain
-            .call(crate::chain::CallRequest { to: Some(to), data: Some(Bytes::from(data)), ..Default::default() })
+            .call(crate::chain::CallRequest {
+                to: Some(to),
+                data: Some(Bytes::from(data)),
+                ..Default::default()
+            })
             .await?;
         decode(&out)
     }
@@ -99,16 +105,21 @@ impl Registry {
         token0: Address,
         token1: Address,
     ) -> Result<Vec<PoolKey>> {
-        let data = IUniswapV2Factory::getPairCall { tokenA: token, tokenB: hub }.abi_encode();
-        let out = self.call(self.v2_factory, data, |b| {
-            IUniswapV2Factory::getPairCall::abi_decode_returns(b)
-                .map_err(|e| EngineError::Rpc(e.to_string()))
-        })
-        .await?;
+        let data = IUniswapV2Factory::getPairCall {
+            tokenA: token,
+            tokenB: hub,
+        }
+        .abi_encode();
+        let out = self
+            .call(self.v2_factory, data, |b| {
+                IUniswapV2Factory::getPairCall::abi_decode_returns(b)
+                    .map_err(|e| EngineError::Rpc(e.to_string()))
+            })
+            .await?;
         if out == Address::ZERO {
             return Ok(Vec::new());
         }
-              Ok(vec![PoolKey {
+        Ok(vec![PoolKey {
             venue: Venue::V2,
             address: out,
             token0,
@@ -201,8 +212,12 @@ impl Registry {
     ) -> Result<Vec<PoolKey>> {
         let mut pools = Vec::new();
         for stable in [false, true] {
-            let data =
-                IAerodromeFactory::getPoolCall { tokenA: token, tokenB: hub, stable }.abi_encode();
+            let data = IAerodromeFactory::getPoolCall {
+                tokenA: token,
+                tokenB: hub,
+                stable,
+            }
+            .abi_encode();
             let out = self
                 .call(self.aero_factory, data, |b| {
                     IAerodromeFactory::getPoolCall::abi_decode_returns(b)
@@ -229,19 +244,25 @@ impl Registry {
 
     /// Static per-pool metadata (24h tier).
     pub async fn load_meta(&self, key: &PoolKey) -> Result<PoolMeta> {
-        let mut meta = PoolMeta { decimals0: 18, decimals1: 18, stable: key.stable, fee_bps: key.fee };
+        let mut meta = PoolMeta {
+            decimals0: 18,
+            decimals1: 18,
+            stable: key.stable,
+            fee_bps: key.fee,
+        };
         if key.venue == Venue::Aerodrome {
-            let data = IAerodromePool::decimals0Call {}.abi_encode();
+            // Aerodrome v1 pools expose no decimals getters; read the tokens'.
+            let data = IERC20::decimalsCall {}.abi_encode();
             meta.decimals0 = self
-                .call(key.address, data, |b| {
-                    IAerodromePool::decimals0Call::abi_decode_returns(b)
+                .call(key.token0, data, |b| {
+                    IERC20::decimalsCall::abi_decode_returns(b)
                         .map_err(|e| EngineError::Rpc(e.to_string()))
                 })
                 .await?;
-            let data = IAerodromePool::decimals1Call {}.abi_encode();
+            let data = IERC20::decimalsCall {}.abi_encode();
             meta.decimals1 = self
-                .call(key.address, data, |b| {
-                    IAerodromePool::decimals1Call::abi_decode_returns(b)
+                .call(key.token1, data, |b| {
+                    IERC20::decimalsCall::abi_decode_returns(b)
                         .map_err(|e| EngineError::Rpc(e.to_string()))
                 })
                 .await?;
@@ -256,8 +277,8 @@ impl Registry {
                 let data = IUniswapV2Pair::getReservesCall {}.abi_encode();
                 let r = self
                     .call(key.address, data, |b| {
-                        Ok(IUniswapV2Pair::getReservesCall::abi_decode_returns(b)
-                            .map_err(|e| EngineError::Rpc(e.to_string()))?)
+                        IUniswapV2Pair::getReservesCall::abi_decode_returns(b)
+                            .map_err(|e| EngineError::Rpc(e.to_string()))
                     })
                     .await?;
                 Ok(PoolState::V2(V2State {
@@ -270,8 +291,8 @@ impl Registry {
                 let data = IAerodromePool::getReservesCall {}.abi_encode();
                 let r = self
                     .call(key.address, data, |b| {
-                        Ok(IAerodromePool::getReservesCall::abi_decode_returns(b)
-                            .map_err(|e| EngineError::Rpc(e.to_string()))?)
+                        IAerodromePool::getReservesCall::abi_decode_returns(b)
+                            .map_err(|e| EngineError::Rpc(e.to_string()))
                     })
                     .await?;
                 let fee_data = IAerodromeFactory::getFeeCall {
@@ -310,8 +331,8 @@ impl Registry {
         let data = IUniswapV3Pool::slot0Call {}.abi_encode();
         let slot0 = self
             .call(key.address, data, |b| {
-                Ok(IUniswapV3Pool::slot0Call::abi_decode_returns(b)
-                    .map_err(|e| EngineError::Rpc(e.to_string()))?)
+                IUniswapV3Pool::slot0Call::abi_decode_returns(b)
+                    .map_err(|e| EngineError::Rpc(e.to_string()))
             })
             .await?;
         let data = IUniswapV3Pool::liquidityCall {}.abi_encode();
@@ -333,43 +354,59 @@ impl Registry {
                 .await?
             }
         };
-        let ticks = self.load_v3_ticks(key.address, signed_i32(slot0.tick)).await?;
+        let (ticks, tick_spacing) = self
+            .load_v3_ticks(key.address, signed_i32(slot0.tick))
+            .await?;
         Ok(V3State {
             sqrt_price_x96: uint_to_u256(slot0.sqrtPriceX96),
             liquidity,
             tick: signed_i32(slot0.tick),
             fee_pips,
+            tick_spacing,
+            fee_pips_by_dir: None,
             ticks,
             ticks_complete: false,
         })
     }
 
-    async fn load_v3_ticks(&self, pool: Address, current_tick: i32) -> Result<Vec<TickData>> {
+    async fn load_v3_ticks(
+        &self,
+        pool: Address,
+        current_tick: i32,
+    ) -> Result<(Vec<TickData>, i32)> {
         // Pool.getTickSpacing() pins the bitmap stride.
         let data = IUniswapV3Pool::tickSpacingCall {}.abi_encode();
         let spacing = self
             .call(pool, data, |b| {
-                Ok(IUniswapV3Pool::tickSpacingCall::abi_decode_returns(b)
+                IUniswapV3Pool::tickSpacingCall::abi_decode_returns(b)
                     .map_err(|e| EngineError::Rpc(e.to_string()))
-                    .map(|v| signed_i32(v))?)
+                    .map(signed_i32)
             })
             .await?;
-        let mut out = Vec::new();
+        let mut candidates: Vec<i32> = Vec::new();
         let center = current_tick.div_euclid(spacing.max(1));
         for direction in [0i32, 1i32] {
             let mut word_pos = center >> 8;
-            let mut collected = 0usize;
             let mut misses = 0usize;
-            while collected < self.max_ticks_per_side && misses < 3 {
-                let word_pos_i16 = i16::try_from(word_pos).unwrap_or(if direction == 0 { i16::MAX } else { i16::MIN });
-                let data = IUniswapV3Pool::tickBitmapCall { wordPosition: word_pos_i16 }.abi_encode();
+            let mut words = 0usize;
+            while misses < 3 && words < 8 {
+                words += 1;
+                let word_pos_i16 = i16::try_from(word_pos).unwrap_or(if direction == 0 {
+                    i16::MAX
+                } else {
+                    i16::MIN
+                });
+                let data = IUniswapV3Pool::tickBitmapCall {
+                    wordPosition: word_pos_i16,
+                }
+                .abi_encode();
                 let word = self
                     .call(pool, data, |b| {
                         IUniswapV3Pool::tickBitmapCall::abi_decode_returns(b)
                             .map_err(|e| EngineError::Rpc(e.to_string()))
                     })
                     .await?;
-        let word = uint_to_u256(word);
+                let word = uint_to_u256(word);
                 if word.is_zero() {
                     misses += 1;
                 } else {
@@ -378,25 +415,11 @@ impl Registry {
                         if word.bit(bit as usize) {
                             let t_index = ((word_pos as i64) << 8) + i64::from(bit);
                             let tick = t_index * i64::from(spacing);
-                            if tick < i64::from(i32::MIN) || tick > i64::from(i32::MAX) {
-                                continue;
+                            if tick >= i64::from(i32::MIN) && tick <= i64::from(i32::MAX) {
+                                candidates.push(tick as i32);
                             }
-                            let tick = tick as i32;
-                            let data = IUniswapV3Pool::ticksCall { tick: make_i24(tick) }.abi_encode();
-                            let info = self
-                                .call(pool, data, |b| {
-                                    Ok(IUniswapV3Pool::ticksCall::abi_decode_returns(b)
-                                        .map_err(|e| EngineError::Rpc(e.to_string()))?)
-                                })
-                                .await?;
-                            out.push(TickData {
-                                tick,
-                                liquidity_net: info.liquidityNet,
-                                liquidity_gross: info.liquidityGross,
-                            });
-                            collected += 1;
                         }
-                                          }
+                    }
                 }
                 if direction == 0 {
                     word_pos += 1;
@@ -405,23 +428,49 @@ impl Registry {
                 }
             }
         }
+        candidates.sort_unstable();
+        candidates.dedup();
+        // Load tick data nearest the current price first: a dense word yields
+        // far more ticks than the quote window needs.
+        let mut down: Vec<i32> = candidates
+            .iter()
+            .copied()
+            .filter(|t| *t <= current_tick)
+            .collect();
+        let mut up: Vec<i32> = candidates
+            .into_iter()
+            .filter(|t| *t > current_tick)
+            .collect();
+        down.sort_by_key(|t| std::cmp::Reverse(*t));
+        up.sort_by_key(|t| *t);
+        down.truncate(self.max_ticks_per_side);
+        up.truncate(self.max_ticks_per_side);
+        let mut out = Vec::new();
+        for tick in down.into_iter().chain(up) {
+            let data = IUniswapV3Pool::ticksCall {
+                tick: make_i24(tick),
+            }
+            .abi_encode();
+            let info = self
+                .call(pool, data, |b| {
+                    IUniswapV3Pool::ticksCall::abi_decode_returns(b)
+                        .map_err(|e| EngineError::Rpc(e.to_string()))
+                })
+                .await?;
+            out.push(TickData {
+                tick,
+                liquidity_net: info.liquidityNet,
+                liquidity_gross: info.liquidityGross,
+            });
+        }
         out.sort_by_key(|t| t.tick);
-        out.dedup_by_key(|t| t.tick);
-        Ok(out)
+        Ok((out, spacing))
     }
 
     async fn load_v4_state(&self, key: &PoolKey) -> Result<V4State> {
-        let id = key
-            .v4_pool_id
-            .unwrap_or_else(|| {
-                crate::venues::v4::pool_id(
-                    key.token0,
-                    key.token1,
-                    key.fee,
-                    key.tick_spacing,
-                    key.hooks,
-                )
-            });
+        let id = key.v4_pool_id.unwrap_or_else(|| {
+            crate::venues::v4::pool_id(key.token0, key.token1, key.fee, key.tick_spacing, key.hooks)
+        });
         let state_slot = pool_state_slot(id);
         let words = self
             .extsload_many(&[
@@ -431,17 +480,24 @@ impl Registry {
             .await?;
         let slot0_word = U256::from_be_slice(words[0].as_slice());
         let liquidity = U256::from_be_slice(words[1].as_slice()).to::<u128>();
-        let (sqrt, tick, _proto, lp_fee) = decode_slot0(slot0_word);
+        let (sqrt, tick, proto, lp_fee) = decode_slot0(slot0_word);
         if sqrt.is_zero() {
             return Err(EngineError::Quote("v4: pool has no state".to_string()));
         }
-        let ticks = self.load_v4_ticks(id, state_slot, tick, key.tick_spacing.max(1)).await?;
+        let ticks = self
+            .load_v4_ticks(id, state_slot, tick, key.tick_spacing.max(1))
+            .await?;
         Ok(V4State {
             base: V3State {
                 sqrt_price_x96: sqrt,
                 liquidity,
                 tick,
                 fee_pips: lp_fee,
+                tick_spacing: key.tick_spacing.max(1),
+                fee_pips_by_dir: Some((
+                    crate::venues::v4::combine_swap_fee(proto & 0xfff, lp_fee),
+                    crate::venues::v4::combine_swap_fee(proto >> 12, lp_fee),
+                )),
                 ticks,
                 ticks_complete: false,
             },
@@ -457,13 +513,14 @@ impl Registry {
         current_tick: i32,
         spacing: i32,
     ) -> Result<Vec<TickData>> {
-        let mut out = Vec::new();
+        let mut candidates: Vec<i32> = Vec::new();
         let center = current_tick.div_euclid(spacing);
         for direction in [0i32, 1i32] {
             let mut word_pos = center >> 8;
-            let mut collected = 0usize;
             let mut misses = 0usize;
-            while collected < self.max_ticks_per_side && misses < 3 {
+            let mut words = 0usize;
+            while misses < 3 && words < 8 {
+                words += 1;
                 let word_slot = tick_bitmap_slot(state_slot, word_pos);
                 let word = self
                     .extsload_many(&[B256::from(word_slot.to_be_bytes::<32>())])
@@ -478,40 +535,59 @@ impl Registry {
                         if word.bit(bit as usize) {
                             let t_index = ((word_pos as i64) << 8) + i64::from(bit);
                             let tick = t_index * i64::from(spacing);
-                            if tick < i64::from(i32::MIN) || tick > i64::from(i32::MAX) {
-                                continue;
+                            if tick >= i64::from(i32::MIN) && tick <= i64::from(i32::MAX) {
+                                candidates.push(tick as i32);
                             }
-                            let tick = tick as i32;
-                            let t_slot = tick_slot(state_slot, tick);
-                            let t_word = self
-                                .extsload_many(&[B256::from(t_slot.to_be_bytes::<32>())])
-                                .await?
-                                .remove(0);
-                            let (gross, net) =
-                                decode_tick_info(U256::from_be_slice(t_word.as_slice()));
-                            out.push(TickData {
-                                tick,
-                                liquidity_net: net,
-                                liquidity_gross: gross,
-                            });
-                            collected += 1;
                         }
                     }
                 }
-                              if direction == 0 {
+                if direction == 0 {
                     word_pos += 1;
                 } else {
                     word_pos -= 1;
                 }
             }
         }
+        candidates.sort_unstable();
+        candidates.dedup();
+        // Load tick data nearest the current price first: a dense word yields
+        // far more ticks than the quote window needs.
+        let mut down: Vec<i32> = candidates
+            .iter()
+            .copied()
+            .filter(|t| *t <= current_tick)
+            .collect();
+        let mut up: Vec<i32> = candidates
+            .into_iter()
+            .filter(|t| *t > current_tick)
+            .collect();
+        down.sort_by_key(|t| std::cmp::Reverse(*t));
+        up.sort_by_key(|t| *t);
+        down.truncate(self.max_ticks_per_side);
+        up.truncate(self.max_ticks_per_side);
+        let mut out = Vec::new();
+        for tick in down.into_iter().chain(up) {
+            let t_slot = tick_slot(state_slot, tick);
+            let t_word = self
+                .extsload_many(&[B256::from(t_slot.to_be_bytes::<32>())])
+                .await?
+                .remove(0);
+            let (gross, net) = decode_tick_info(U256::from_be_slice(t_word.as_slice()));
+            out.push(TickData {
+                tick,
+                liquidity_net: net,
+                liquidity_gross: gross,
+            });
+        }
         out.sort_by_key(|t| t.tick);
-        out.dedup_by_key(|t| t.tick);
         Ok(out)
     }
 
     async fn extsload_many(&self, slots: &[B256]) -> Result<Vec<B256>> {
-        let data = IExtsloadMany::extsloadCall { slots: slots.to_vec() }.abi_encode();
+        let data = IExtsloadMany::extsloadCall {
+            slots: slots.to_vec(),
+        }
+        .abi_encode();
         self.call(self.pool_manager, data, |b| {
             IExtsloadMany::extsloadCall::abi_decode_returns(b)
                 .map_err(|e| EngineError::Rpc(e.to_string()))
@@ -544,9 +620,5 @@ pub fn uint_to_u256<const BITS: usize, const LIMBS: usize>(x: Uint<BITS, LIMBS>)
 }
 
 fn ordered(a: Address, b: Address) -> (Address, Address) {
-    if a <= b {
-        (a, b)
-    } else {
-        (b, a)
-    }
+    if a <= b { (a, b) } else { (b, a) }
 }

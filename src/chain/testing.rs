@@ -13,8 +13,10 @@ use crate::chain::{
 use crate::error::Result;
 
 /// A chain whose `eth_call` answers come from a scripted closure.
+type Responder = Box<dyn Fn(&CallRequest) -> Result<Bytes> + Send + Sync>;
+
 pub struct ScriptedChain {
-    responder: Box<dyn Fn(&CallRequest) -> Result<Bytes> + Send + Sync>,
+    responder: Responder,
     calls: AtomicUsize,
     gas_price: U256,
     nonce: u64,
@@ -43,11 +45,17 @@ impl ScriptedChain {
 #[async_trait]
 impl ChainAdapter for ScriptedChain {
     async fn bench(&self) -> BenchReport {
-        BenchReport { endpoints: Vec::new() }
+        BenchReport {
+            endpoints: Vec::new(),
+        }
     }
 
     fn health(&self) -> RpcHealth {
-        RpcHealth { healthy: 1, total: 1, best: Some("scripted".to_string()) }
+        RpcHealth {
+            healthy: 1,
+            total: 1,
+            best: Some("scripted".to_string()),
+        }
     }
 
     async fn gas_price(&self) -> Result<U256> {
@@ -81,7 +89,11 @@ pub struct CountingAdapter {
 
 impl CountingAdapter {
     pub fn new(inner: Arc<dyn ChainAdapter>) -> Arc<Self> {
-        Arc::new(Self { inner, calls: AtomicUsize::new(0), estimates: AtomicUsize::new(0) })
+        Arc::new(Self {
+            inner,
+            calls: AtomicUsize::new(0),
+            estimates: AtomicUsize::new(0),
+        })
     }
 
     pub fn call_count(&self) -> usize {

@@ -5,18 +5,16 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use alloy::primitives::{address, Address, U256};
+use alloy::primitives::{Address, U256, address};
 
+use basevantage::chain::DynChain;
+use basevantage::chain::testing::ScriptedChain;
 use basevantage::config::Config;
+use basevantage::harness::Engine;
 use basevantage::market::{MarketData, NoopStatsSource, PoolKey, TtlConfig};
 use basevantage::router::{Hop, NetInputs, Quote, Route, Router};
-use basevantage::venues::{
-    PoolState, TickData, V2State, V3State, Venue,
-};
-use basevantage::chain::testing::ScriptedChain;
-use basevantage::chain::DynChain;
-use basevantage::harness::Engine;
 use basevantage::safety::{ManualAssessor, SafetyPolicy};
+use basevantage::venues::{PoolState, TickData, V2State, V3State, Venue};
 use basevantage::watchlist::{MemoryStore, Watchlist};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -109,6 +107,8 @@ pub fn v3_state(sqrt_price_x96: U256, liquidity: u128, fee_pips: u32) -> PoolSta
         liquidity,
         tick: 0,
         fee_pips,
+        tick_spacing: 60,
+        fee_pips_by_dir: None,
         ticks: vec![TickData {
             tick: -887_272,
             liquidity_net: liquidity as i128,
@@ -120,9 +120,7 @@ pub fn v3_state(sqrt_price_x96: U256, liquidity: u128, fee_pips: u32) -> PoolSta
 
 /// A no-network market wired to a scripted chain that must stay silent.
 pub fn offline_market() -> (Arc<MarketData>, Arc<ScriptedChain>) {
-    let chain = ScriptedChain::new(|_| {
-        panic!("offline market must not make RPC calls")
-    });
+    let chain = ScriptedChain::new(|_| panic!("offline market must not make RPC calls"));
     let ttls = TtlConfig {
         static_ttl: Duration::from_secs(3600),
         reserves_ttl: Duration::from_secs(3600),
@@ -145,7 +143,12 @@ pub fn offline_market() -> (Arc<MarketData>, Arc<ScriptedChain>) {
     (market, chain)
 }
 
-pub fn single_hop_route(pool: PoolKey, token_in: Address, token_out: Address, amount_in: U256) -> Route {
+pub fn single_hop_route(
+    pool: PoolKey,
+    token_in: Address,
+    token_out: Address,
+    amount_in: U256,
+) -> Route {
     Route {
         hops: vec![Hop {
             pool,

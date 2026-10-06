@@ -41,12 +41,31 @@ pub struct RpcHealth {
 /// Pool state change surfaced by the event source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PoolEvent {
-    Sync { pool: Address, reserve0: U256, reserve1: U256, block: u64 },
-    Swap { pool: Address, amount0_in: U256, amount1_in: U256, block: u64 },
-    Mint { pool: Address, block: u64 },
-    Burn { pool: Address, block: u64 },
+    Sync {
+        pool: Address,
+        reserve0: U256,
+        reserve1: U256,
+        block: u64,
+    },
+    Swap {
+        pool: Address,
+        amount0_in: U256,
+        amount1_in: U256,
+        block: u64,
+    },
+    Mint {
+        pool: Address,
+        block: u64,
+    },
+    Burn {
+        pool: Address,
+        block: u64,
+    },
     // v3/v4: price/liquidity changed; exact deltas are re-read from chain.
-    SlotUpdate { pool: Address, block: u64 },
+    SlotUpdate {
+        pool: Address,
+        block: u64,
+    },
 }
 
 #[derive(Debug, Clone, Default)]

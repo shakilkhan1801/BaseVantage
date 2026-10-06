@@ -43,9 +43,7 @@ enum Cmd {
         decimals: u8,
     },
     /// Token dossier: metadata, assessment probes, pools, stats.
-    DossierData {
-        token: Address,
-    },
+    DossierData { token: Address },
     /// Simulate a route execution with settlement (observe mode only).
     Simulate {
         #[arg(long)]
@@ -65,7 +63,9 @@ enum Cmd {
 
 fn to_raw(with: f64, decimals: u8) -> Result<U256> {
     if !with.is_finite() || with <= 0.0 {
-        return Err(EngineError::Config("--with must be a positive number".to_string()));
+        return Err(EngineError::Config(
+            "--with must be a positive number".to_string(),
+        ));
     }
     let scale = 10f64.powi(i32::from(decimals));
     let raw = with * scale;
@@ -79,15 +79,27 @@ async fn run(cli: Cli) -> Result<String> {
     let config = Config::load(&cli.config)?;
     let engine = Engine::boot(config).await?;
     match cli.command {
-        Cmd::Quote { sell, with, decimals } => {
-            engine.cmd_quote(sell, to_raw(with, decimals)?).await
-        }
-        Cmd::RouteList { sell, with, decimals } => {
-            engine.cmd_route_list(sell, to_raw(with, decimals)?).await
-        }
+        Cmd::Quote {
+            sell,
+            with,
+            decimals,
+        } => engine.cmd_quote(sell, to_raw(with, decimals)?).await,
+        Cmd::RouteList {
+            sell,
+            with,
+            decimals,
+        } => engine.cmd_route_list(sell, to_raw(with, decimals)?).await,
         Cmd::DossierData { token } => engine.cmd_dossier(token).await,
-        Cmd::Simulate { sell, with, decimals, route, target } => {
-            engine.cmd_simulate(sell, to_raw(with, decimals)?, route, target).await
+        Cmd::Simulate {
+            sell,
+            with,
+            decimals,
+            route,
+            target,
+        } => {
+            engine
+                .cmd_simulate(sell, to_raw(with, decimals)?, route, target)
+                .await
         }
     }
 }

@@ -151,9 +151,10 @@ impl MarketData {
         let hit = self
             .tokens
             .get_or_fetch(addr, Tier::Static, Source::Registry, async move {
-                let symbol = call_erc20_string(&chain, addr, IERC20::symbolCall {}.abi_encode())
-                    .await?;
-                let name = call_erc20_string(&chain, addr, IERC20::nameCall {}.abi_encode()).await?;
+                let symbol =
+                    call_erc20_string(&chain, addr, IERC20::symbolCall {}.abi_encode()).await?;
+                let name =
+                    call_erc20_string(&chain, addr, IERC20::nameCall {}.abi_encode()).await?;
                 let decimals_data = IERC20::decimalsCall {}.abi_encode();
                 let out = chain
                     .call(crate::chain::CallRequest {
@@ -164,7 +165,12 @@ impl MarketData {
                     .await?;
                 let decimals = IERC20::decimalsCall::abi_decode_returns(&out)
                     .map_err(|e| EngineError::Rpc(e.to_string()))?;
-                Ok(Some(TokenInfo { address: addr, symbol, name, decimals }))
+                Ok(Some(TokenInfo {
+                    address: addr,
+                    symbol,
+                    name,
+                    decimals,
+                }))
             })
             .await?;
         if hit.is_some() {
@@ -195,7 +201,10 @@ impl MarketData {
             .await?;
         if let Some(h) = &hit {
             for key in h.value.iter() {
-                self.pool_index.lock().expect("poisoned").insert(key.address, key.clone());
+                self.pool_index
+                    .lock()
+                    .expect("poisoned")
+                    .insert(key.address, key.clone());
             }
             self.save_static_snapshot();
         }
@@ -250,15 +259,20 @@ impl MarketData {
 
     /// Inject token metadata (event-driven updates and offline tests).
     pub fn inject_token(&self, info: TokenInfo) {
-        self.tokens.insert(info.address, info, Source::Registry, Tier::Static);
+        self.tokens
+            .insert(info.address, info, Source::Registry, Tier::Static);
     }
 
     /// Inject discovery results for a token.
     pub fn inject_pools(&self, token: Address, pools: Vec<PoolKey>) {
         for key in &pools {
-            self.pool_index.lock().expect("poisoned").insert(key.address, key.clone());
+            self.pool_index
+                .lock()
+                .expect("poisoned")
+                .insert(key.address, key.clone());
         }
-        self.discovery.insert(token, pools, Source::Registry, Tier::Static);
+        self.discovery
+            .insert(token, pools, Source::Registry, Tier::Static);
     }
 
     /// Inject static pool metadata.
@@ -268,14 +282,22 @@ impl MarketData {
 
     /// Inject a state directly (event-driven refresh, tests).
     pub fn inject_state(&self, key: PoolKey, state: PoolState, source: Source) {
-        self.pool_index.lock().expect("poisoned").insert(key.address, key.clone());
+        self.pool_index
+            .lock()
+            .expect("poisoned")
+            .insert(key.address, key.clone());
         self.states.insert(key, state, source, Tier::Reserves);
     }
 
     /// Apply a pool event: patch what the event carries, invalidate the rest.
     pub fn apply_event(&self, event: &PoolEvent) {
         match event {
-            PoolEvent::Sync { pool, reserve0, reserve1, .. } => {
+            PoolEvent::Sync {
+                pool,
+                reserve0,
+                reserve1,
+                ..
+            } => {
                 let key = self.pool_index.lock().expect("poisoned").get(pool).cloned();
                 if let Some(key) = key {
                     let updated = match self.states.peek(&key) {
@@ -321,10 +343,10 @@ impl MarketData {
 
     fn save_static_snapshot(&self) {
         let snap = self.build_snapshot();
-        if let Ok(json) = serde_json::to_string_pretty(&snap) {
-            if std::fs::write(&self.static_store_path, json).is_ok() {
-                self.persist_writes.fetch_add(1, Ordering::Relaxed);
-            }
+        if let Ok(json) = serde_json::to_string_pretty(&snap)
+            && std::fs::write(&self.static_store_path, json).is_ok()
+        {
+            self.persist_writes.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -408,7 +430,7 @@ impl MarketData {
                 restored += 1;
             }
         }
-              for entry in snap.discoveries {
+        for entry in snap.discoveries {
             if let Some(at) = restore(entry.fetched_at_epoch_ms) {
                 for key in &entry.value {
                     self.pool_index
@@ -431,7 +453,10 @@ impl MarketData {
 }
 
 fn epoch_ms() -> u128 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
 }
 
 /// `symbol()`/`name()` are both single-string returns; decode uniformly.

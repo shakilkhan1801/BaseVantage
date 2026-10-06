@@ -110,7 +110,7 @@ sol! {
         struct QuoteExactSingleParams {
             PoolKey poolKey;
             bool zeroForOne;
-            uint256 exactAmount;
+            uint128 exactAmount;
             bytes hookData;
         }
         function quoteExactInputSingle(QuoteExactSingleParams calldata params) external returns (uint256 amountOut, uint256 gasEstimate);

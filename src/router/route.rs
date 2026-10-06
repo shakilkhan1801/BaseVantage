@@ -43,7 +43,11 @@ impl Route {
     /// Multi-hop v3 legs are where fee-on-transfer accounting breaks
     /// exact-in assumptions.
     pub fn has_multihop_v3(&self) -> bool {
-        self.hops.len() > 1 && self.hops.iter().any(|h| h.pool.venue == crate::venues::Venue::V3)
+        self.hops.len() > 1
+            && self
+                .hops
+                .iter()
+                .any(|h| h.pool.venue == crate::venues::Venue::V3)
     }
 }
 
@@ -75,7 +79,7 @@ pub fn candidate_routes(
             direct_targets.push(*hub);
         }
     }
-      for target in &direct_targets {
+    for target in &direct_targets {
         for pool in pools_from(sell) {
             if pool.token0 == *target || pool.token1 == *target {
                 routes.push(Route {
@@ -138,7 +142,9 @@ pub fn require_hops(route: &Route) -> Result<()> {
     }
     for w in route.hops.windows(2) {
         if w[0].token_out != w[1].token_in {
-            return Err(EngineError::NoRoute("route legs do not connect".to_string()));
+            return Err(EngineError::NoRoute(
+                "route legs do not connect".to_string(),
+            ));
         }
     }
     Ok(())

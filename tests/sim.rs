@@ -49,7 +49,14 @@ async fn multihop_sell_settles_usdc_and_wrapped_native_residue_zero() {
     let net = engine.net_inputs(0, U256::from(150_000)).await.unwrap();
 
     // Multi-hop sell TOKEN -> WETH -> USDC.
-    let route = two_hop_route(key_tw.clone(), key_wu.clone(), TOKEN, WETH, USDC, tokens(100));
+    let route = two_hop_route(
+        key_tw.clone(),
+        key_wu.clone(),
+        TOKEN,
+        WETH,
+        USDC,
+        tokens(100),
+    );
     let sim = engine.simulate(&route, &net, None).await.expect("sim runs");
 
     assert!(sim.settled > U256::ZERO, "settlement must land in USDC");
@@ -60,12 +67,18 @@ async fn multihop_sell_settles_usdc_and_wrapped_native_residue_zero() {
         "multi-hop sell must leave exactly zero wrapped-native residue"
     );
     assert_eq!(sim.hop_amounts.len(), 2);
-    assert!(sim.hop_amounts[1] > U256::ZERO, "second hop must deliver USDC");
+    assert!(
+        sim.hop_amounts[1] > U256::ZERO,
+        "second hop must deliver USDC"
+    );
 
     // A route that ENDS in wrapped native settles it fully into USDC too:
     // settlement never strands WETH dust.
     let single = single_hop_route(key_tw, TOKEN, WETH, tokens(100));
-    let sim = engine.simulate(&single, &net, None).await.expect("sim runs");
+    let sim = engine
+        .simulate(&single, &net, None)
+        .await
+        .expect("sim runs");
     assert!(sim.settled > U256::ZERO, "settled proceeds must be USDC");
     assert_eq!(
         sim.wrapped_native_residue,

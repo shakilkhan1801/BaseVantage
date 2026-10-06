@@ -1,8 +1,8 @@
-use alloy::primitives::{address, Address, Bytes, B256, U256};
+use alloy::primitives::{Address, B256, Bytes, U256, address};
 
 use crate::error::{EngineError, Result};
 use crate::venues::v3::quote_exact_in_state;
-use crate::venues::{PoolState, SwapLeg, TickData, Venue, VenueQuoter, V3State, V4State};
+use crate::venues::{PoolState, SwapLeg, TickData, V3State, V4State, Venue, VenueQuoter};
 
 /// Uniswap V4 venue: v3-style concentrated liquidity behind one PoolManager,
 /// quoted locally from `extsload` state and encoded through the Universal Router.
@@ -55,7 +55,10 @@ pub fn mapping_slot(base: U256, key: U256) -> U256 {
 }
 
 pub fn tick_slot(state_slot: U256, tick: i32) -> U256 {
-    mapping_slot(state_slot + U256::from(TICKS_OFFSET), word_i24_to_u256(tick))
+    mapping_slot(
+        state_slot + U256::from(TICKS_OFFSET),
+        word_i24_to_u256(tick),
+    )
 }
 
 pub fn tick_bitmap_slot(state_slot: U256, word_pos: i32) -> U256 {
@@ -87,6 +90,13 @@ fn word_i24(v: i32) -> [u8; 32] {
     }
     w[29..].copy_from_slice(&v.to_be_bytes()[1..4]);
     w
+}
+
+/// Core's `ProtocolFeeLibrary.calculateSwapFee`: the protocol fee is taken
+/// from the input first and the LP fee from the remainder, so the combined
+/// rate is `protocolFee + lpFee - protocolFee * lpFee / 1e6`.
+pub fn combine_swap_fee(protocol_fee: u32, lp_fee: u32) -> u32 {
+    protocol_fee + lp_fee - (protocol_fee * lp_fee) / 1_000_000
 }
 
 /// Decode a v4 `Pool.Slot0` word: (sqrtPriceX96, tick, protocolFee, lpFee).
@@ -129,14 +139,20 @@ impl V4Venue {
         ticks_complete: bool,
         hooks: Address,
         dynamic_fee: bool,
+        tick_spacing: i32,
     ) -> V4State {
-        let (sqrt, tick, _protocol_fee, lp_fee) = decode_slot0(slot0_word);
+        let (sqrt, tick, protocol_fee, lp_fee) = decode_slot0(slot0_word);
         V4State {
             base: V3State {
                 sqrt_price_x96: sqrt,
                 liquidity,
                 tick,
                 fee_pips: lp_fee,
+                tick_spacing,
+                fee_pips_by_dir: Some((
+                    combine_swap_fee(protocol_fee & 0xfff, lp_fee),
+                    combine_swap_fee(protocol_fee >> 12, lp_fee),
+                )),
                 ticks,
                 ticks_complete,
             },
@@ -184,7 +200,7 @@ impl VenueQuoter for V4Venue {
                 tick_spacing: leg.tick_spacing,
                 hooks: leg.hooks,
             };
-                          return Ok(encode_v4_swap_single(
+            return Ok(encode_v4_swap_single(
                 key,
                 leg.token_in,
                 leg.token_out,
@@ -205,30 +221,16 @@ impl VenueQuoter for V4Venue {
             .collect();
         let out_token = legs[legs.len() - 1].token_out;
         Ok(encode_v4_swap_path(
-            keys,
-            legs,
-            to,
-            out_token,
-            amount_in,
-            min_out,
-            deadline,
+            keys, legs, to, out_token, amount_in, min_out, deadline,
         ))
     }
 }
 
 fn min_addr(a: Address, b: Address) -> Address {
-    if a <= b {
-        a
-    } else {
-        b
-    }
+    if a <= b { a } else { b }
 }
 fn max_addr(a: Address, b: Address) -> Address {
-    if a <= b {
-        b
-    } else {
-        a
-    }
+    if a <= b { b } else { a }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -252,11 +254,13 @@ impl PoolKeyWords {
     }
 }
 
-// Universal Router action codes (v4-periphery `Actions`).
-const ACTION_SWAP_EXACT_IN: u8 = 0x00;
-const ACTION_SWAP_EXACT_IN_SINGLE: u8 = 0x01;
-const ACTION_SETTLE_ALL: u8 = 0x06;
-const ACTION_TAKE_ALL: u8 = 0x08;
+// Universal Router action codes — the numbering the Base deployment
+// dispatches (verified against the live router; older drafts used a
+// different layout and revert with UnsupportedAction).
+const ACTION_SWAP_EXACT_IN_SINGLE: u8 = 0x06;
+const ACTION_SWAP_EXACT_IN: u8 = 0x07;
+const ACTION_SETTLE_ALL: u8 = 0x0c;
+const ACTION_TAKE_ALL: u8 = 0x0f;
 // Universal Router command codes.
 const CMD_V4_SWAP: u8 = 0x10;
 
@@ -271,13 +275,31 @@ pub fn encode_v4_swap_single(
     min_out: U256,
     deadline: u64,
 ) -> Bytes {
-    let actions = vec![ACTION_SWAP_EXACT_IN_SINGLE, ACTION_SETTLE_ALL, ACTION_TAKE_ALL];
+    let actions = vec![
+        ACTION_SWAP_EXACT_IN_SINGLE,
+        ACTION_SETTLE_ALL,
+        ACTION_TAKE_ALL,
+    ];
+    // ExactInputSingleParams = (PoolKey, bool zeroForOne, uint256 amountIn,
+    // uint256 amountOutMin, bytes hookData) — head 9 words + empty hookData.
+    let zero_for_one = token_in == key.currency0;
     let mut swap_params = key.encode();
+    swap_params.extend_from_slice(&if zero_for_one {
+        U256::from(1).to_be_bytes::<32>()
+    } else {
+        U256::ZERO.to_be_bytes::<32>()
+    });
     swap_params.extend_from_slice(&amount_in.to_be_bytes::<32>());
     swap_params.extend_from_slice(&min_out.to_be_bytes::<32>());
+    swap_params.extend_from_slice(&U256::from(9 * 32).to_be_bytes::<32>());
+    swap_params.extend_from_slice(&U256::ZERO.to_be_bytes::<32>());
     let settle_params = encode_words(&[word_address(token_in), amount_in.to_be_bytes()]);
     let take_params = encode_words(&[word_address(token_out), min_out.to_be_bytes()]);
-    let params = vec![Bytes::from(swap_params), Bytes::from(settle_params), Bytes::from(take_params)];
+    let params = vec![
+        Bytes::from(wrap_single_value(swap_params)),
+        Bytes::from(settle_params),
+        Bytes::from(take_params),
+    ];
     let input = encode_v4_input(&actions, &params);
     encode_execute(&[CMD_V4_SWAP], &[Bytes::from(input)], deadline)
 }
@@ -302,7 +324,7 @@ fn encode_v4_swap_path(
     for (i, key) in keys.iter().enumerate() {
         offsets.extend_from_slice(&U256::from((n + i * 3) * 32).to_be_bytes::<32>());
         let mut body = Vec::new();
-              body.extend_from_slice(&word_address(legs[i].token_out));
+        body.extend_from_slice(&word_address(legs[i].token_out));
         body.extend_from_slice(&U256::from(key.fee).to_be_bytes::<32>());
         body.extend_from_slice(&word_i24(key.tick_spacing));
         body.extend_from_slice(&word_address(key.hooks));
@@ -326,9 +348,23 @@ fn encode_v4_swap_path(
 
     let settle_params = encode_words(&[word_address(legs[0].token_in), amount_in.to_be_bytes()]);
     let take_params = encode_words(&[word_address(out_token), min_out.to_be_bytes()]);
-    let params = vec![Bytes::from(swap_params), Bytes::from(settle_params), Bytes::from(take_params)];
+    let params = vec![
+        Bytes::from(wrap_single_value(swap_params)),
+        Bytes::from(settle_params),
+        Bytes::from(take_params),
+    ];
     let input = encode_v4_input(&actions, &params);
     encode_execute(&[CMD_V4_SWAP], &[Bytes::from(input)], deadline)
+}
+
+/// The router decodes swap params with `abi.decode(elem, (Struct))`, i.e.
+/// single-value encoding: a dynamic struct carries a leading offset word
+/// before its tuple body. Static params (settle/take) are unwrapped tuples.
+fn wrap_single_value(tuple: Vec<u8>) -> Vec<u8> {
+    let mut out = Vec::with_capacity(tuple.len() + 32);
+    out.extend_from_slice(&U256::from(32).to_be_bytes::<32>());
+    out.extend_from_slice(&tuple);
+    out
 }
 
 fn encode_words(words: &[[u8; 32]]) -> Vec<u8> {
@@ -340,7 +376,7 @@ fn encode_words(words: &[[u8; 32]]) -> Vec<u8> {
 }
 
 fn encode_bytes_word(data: &[u8]) -> Vec<u8> {
-    let padded = (data.len() + 31) / 32 * 32;
+    let padded = data.len().div_ceil(32) * 32;
     let mut out = U256::from(data.len()).to_be_bytes::<32>().to_vec();
     out.extend_from_slice(data);
     out.resize(out.len() + (padded - data.len()), 0);
@@ -358,7 +394,7 @@ fn encode_v4_input(actions: &[u8], params: &[Bytes]) -> Vec<u8> {
     let mut cursor = params.len() * 32;
     for p in params {
         params_tail.extend_from_slice(&U256::from(cursor).to_be_bytes::<32>());
-        cursor += 32 + ((p.len() + 31) / 32 * 32);
+        cursor += 32 + p.len().div_ceil(32) * 32;
     }
     for p in params {
         params_tail.extend_from_slice(&encode_bytes_word(p));
@@ -378,7 +414,7 @@ fn encode_execute(commands: &[u8], inputs: &[Bytes], deadline: u64) -> Bytes {
     let mut out = selector;
     // Head: (bytes commands, bytes[] inputs, uint256 deadline)
     out.extend_from_slice(&U256::from(3 * 32).to_be_bytes::<32>()); // commands offset
-    let commands_tail_len = 32 + ((commands.len() + 31) / 32 * 32);
+    let commands_tail_len = 32 + commands.len().div_ceil(32) * 32;
     let inputs_offset = 3 * 32 + commands_tail_len;
     out.extend_from_slice(&U256::from(inputs_offset).to_be_bytes::<32>());
     out.extend_from_slice(&U256::from(deadline).to_be_bytes::<32>());
@@ -390,7 +426,7 @@ fn encode_execute(commands: &[u8], inputs: &[Bytes], deadline: u64) -> Bytes {
     let mut cursor = n * 32;
     for p in inputs {
         out.extend_from_slice(&U256::from(cursor).to_be_bytes::<32>());
-        cursor += 32 + ((p.len() + 31) / 32 * 32);
+        cursor += 32 + p.len().div_ceil(32) * 32;
     }
     for p in inputs {
         out.extend_from_slice(&encode_bytes_word(p));

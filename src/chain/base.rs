@@ -11,6 +11,9 @@ use async_trait::async_trait;
 use crate::chain::{BenchReport, CallRequest, ChainAdapter, EventFilter, EventStream, RpcHealth};
 use crate::error::{EngineError, Result};
 
+const RATE_LIMIT_ATTEMPTS: u32 = 4;
+const RATE_LIMIT_BASE_DELAY: Duration = Duration::from_millis(250);
+
 /// One pooled HTTP endpoint with a rolling health score.
 pub struct PoolEndpoint {
     pub url: String,
@@ -23,7 +26,10 @@ pub struct PoolEndpoint {
 impl PoolEndpoint {
     fn new(url: String) -> Result<Self> {
         let provider = ProviderBuilder::new()
-            .connect_http(url.parse().map_err(|e| EngineError::Rpc(format!("bad url {url}: {e}")))?)
+            .connect_http(
+                url.parse()
+                    .map_err(|e| EngineError::Rpc(format!("bad url {url}: {e}")))?,
+            )
             .erased();
         Ok(Self {
             url,
@@ -70,7 +76,10 @@ impl RpcPool {
         for url in urls {
             endpoints.push(Arc::new(PoolEndpoint::new(url.clone())?));
         }
-        Ok(Self { endpoints, rr: AtomicU64::new(0) })
+        Ok(Self {
+            endpoints,
+            rr: AtomicU64::new(0),
+        })
     }
 
     /// Time every endpoint and re-score. Latency and liveness both count.
@@ -89,7 +98,12 @@ impl RpcPool {
                 0
             };
             ep.score.store(score, Ordering::Relaxed);
-            rows.push(EndpointBench { url: ep.url.clone(), latency_ms, ok, score });
+            rows.push(EndpointBench {
+                url: ep.url.clone(),
+                latency_ms,
+                ok,
+                score,
+            });
         }
         BenchReport { endpoints: rows }
     }
@@ -102,7 +116,11 @@ impl RpcPool {
             .filter(|e| e.healthy())
             .max_by_key(|e| e.score())
             .map(|e| e.url.clone());
-        RpcHealth { healthy, total: self.endpoints.len(), best }
+        RpcHealth {
+            healthy,
+            total: self.endpoints.len(),
+            best,
+        }
     }
 
     /// Endpoints best-first (score, then round-robin tiebreak), then the rest.
@@ -117,24 +135,39 @@ impl RpcPool {
         eps
     }
 
-    /// Try ranked endpoints in order until one answers.
+    /// Try ranked endpoints in order until one answers. A rate-limited endpoint
+    /// is alive but throttled: retry it with exponential backoff instead of
+    /// failing over or scoring it down. Non-rate-limit errors fail over at once;
+    /// a full pass with no rate-limit error stops the retry loop.
     pub async fn with_provider<T, F, Fut>(&self, mut f: F) -> Result<T>
     where
         F: FnMut(DynProvider) -> Fut,
         Fut: std::future::Future<Output = Result<T>>,
     {
         let mut last: Option<EngineError> = None;
-        for ep in self.ranked() {
-            match f(ep.provider.clone()).await {
-                Ok(v) => {
-                    ep.healthy.store(true, Ordering::Relaxed);
-                    return Ok(v);
-                }
-                Err(e) => {
-                    ep.healthy.store(false, Ordering::Relaxed);
-                    last = Some(e);
+        for attempt in 0..RATE_LIMIT_ATTEMPTS {
+            let mut saw_rate_limit = false;
+            for ep in self.ranked() {
+                match f(ep.provider.clone()).await {
+                    Ok(v) => {
+                        ep.healthy.store(true, Ordering::Relaxed);
+                        return Ok(v);
+                    }
+                    Err(e) if is_rate_limited(&e) => {
+                        ep.healthy.store(true, Ordering::Relaxed);
+                        saw_rate_limit = true;
+                        last = Some(e);
+                    }
+                    Err(e) => {
+                        ep.healthy.store(false, Ordering::Relaxed);
+                        last = Some(e);
+                    }
                 }
             }
+            if !saw_rate_limit || attempt + 1 == RATE_LIMIT_ATTEMPTS {
+                break;
+            }
+            tokio::time::sleep(RATE_LIMIT_BASE_DELAY * 2u32.pow(attempt)).await;
         }
         Err(last.unwrap_or(EngineError::NoHealthyEndpoint))
     }
@@ -147,7 +180,11 @@ pub struct BaseChain {
 }
 
 impl BaseChain {
-    pub fn new(http_urls: &[String], ws_urls: Vec<String>, bench_interval_secs: u64) -> Result<Self> {
+    pub fn new(
+        http_urls: &[String],
+        ws_urls: Vec<String>,
+        bench_interval_secs: u64,
+    ) -> Result<Self> {
         let pool = Arc::new(RpcPool::new(http_urls)?);
         Ok(Self {
             pool,
@@ -197,15 +234,17 @@ impl ChainAdapter for BaseChain {
 
     async fn gas_price(&self) -> Result<U256> {
         self.pool
-            .with_provider(|p| async move { Ok(U256::from(p.get_gas_price().await.map_err(rpc_err)?)) })
+            .with_provider(
+                |p| async move { Ok(U256::from(p.get_gas_price().await.map_err(rpc_err)?)) },
+            )
             .await
     }
 
     async fn nonce(&self, account: Address) -> Result<u64> {
         self.pool
-            .with_provider(|p| async move {
-                p.get_transaction_count(account).await.map_err(rpc_err)
-            })
+            .with_provider(
+                |p| async move { p.get_transaction_count(account).await.map_err(rpc_err) },
+            )
             .await
     }
 
@@ -257,6 +296,22 @@ pub(crate) fn rpc_err(e: impl std::fmt::Display) -> EngineError {
     EngineError::Rpc(e.to_string())
 }
 
+/// Rate-limit answers (HTTP 429, JSON-RPC -32016) mean the endpoint is alive
+/// but throttled; they deserve backoff and retry rather than failover.
+pub(crate) fn is_rate_limited(e: &EngineError) -> bool {
+    match e {
+        EngineError::Rpc(msg) => {
+            let m = msg.to_lowercase();
+            m.contains("http error 429")
+                || m.contains("429 too many")
+                || m.contains("rate limit")
+                || m.contains("too many requests")
+                || m.contains("-32016")
+        }
+        _ => false,
+    }
+}
+
 /// Convenience: read a contract's `eth_call` result.
 pub async fn eth_call(
     chain: &dyn ChainAdapter,
@@ -264,5 +319,12 @@ pub async fn eth_call(
     data: Bytes,
     block: Option<alloy::eips::BlockId>,
 ) -> Result<Bytes> {
-    chain.call(CallRequest { to: Some(to), data: Some(data), block, ..Default::default() }).await
+    chain
+        .call(CallRequest {
+            to: Some(to),
+            data: Some(data),
+            block,
+            ..Default::default()
+        })
+        .await
 }

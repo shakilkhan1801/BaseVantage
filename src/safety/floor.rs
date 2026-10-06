@@ -88,7 +88,7 @@ impl FloorModule {
             });
         }
 
-          let min_out = min_out.max(target_floor);
+        let min_out = min_out.max(target_floor);
         Ok(FloorResult { min_out, quotes })
     }
 

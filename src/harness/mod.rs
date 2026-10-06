@@ -43,11 +43,7 @@ struct OverlayAssessor {
 
 #[async_trait]
 impl TaxOracle for OverlayAssessor {
-    async fn assess(
-        &self,
-        token: Address,
-        pools: &[PoolKey],
-    ) -> Result<Option<TokenAssessment>> {
+    async fn assess(&self, token: Address, pools: &[PoolKey]) -> Result<Option<TokenAssessment>> {
         if let Some(hit) = self.manual.assess(token, pools).await? {
             return Ok(Some(hit));
         }
@@ -99,7 +95,7 @@ impl Engine {
             Arc::new(NoopStatsSource),
             config.cache.static_store_path.clone(),
         );
-              market.load_static_snapshot(Duration::from_secs(config.cache.static_ttl_secs));
+        market.load_static_snapshot(Duration::from_secs(config.cache.static_ttl_secs));
 
         let router = Router::new(
             market.clone(),
@@ -108,7 +104,10 @@ impl Engine {
         );
         let manual = Arc::new(crate::safety::ManualAssessor::new());
         let probe = ProbeAssessor::new(chain.clone() as DynChain);
-        let assessor = Arc::new(OverlayAssessor { manual: manual.clone(), probe });
+        let assessor = Arc::new(OverlayAssessor {
+            manual: manual.clone(),
+            probe,
+        });
         let watchlist = Arc::new(Watchlist::with_json_file(
             config.watchlist.cap,
             config.watchlist.store_path.clone(),
@@ -178,7 +177,7 @@ impl Engine {
                 }
             }
         }
-              best.map(|(p, _)| p).ok_or_else(|| {
+        best.map(|(p, _)| p).ok_or_else(|| {
             EngineError::Quote("no wrapped-native/settlement pool for pricing".to_string())
         })
     }
@@ -193,12 +192,21 @@ fn floor_anchors(
     swap_price_1e18: U256,
     target_price_1e18: Option<U256>,
 ) -> Vec<FloorAnchor> {
-    let mut anchors = vec![FloorAnchor { kind: AnchorKind::Swap, price_1e18: swap_price_1e18 }];
+    let mut anchors = vec![FloorAnchor {
+        kind: AnchorKind::Swap,
+        price_1e18: swap_price_1e18,
+    }];
     if let Some(p) = reference_price_1e18 {
-        anchors.push(FloorAnchor { kind: AnchorKind::Reference, price_1e18: p });
+        anchors.push(FloorAnchor {
+            kind: AnchorKind::Reference,
+            price_1e18: p,
+        });
     }
     if let Some(p) = target_price_1e18 {
-        anchors.push(FloorAnchor { kind: AnchorKind::Target, price_1e18: p });
+        anchors.push(FloorAnchor {
+            kind: AnchorKind::Target,
+            price_1e18: p,
+        });
     }
     let _ = sell_amount_raw;
     anchors
@@ -206,13 +214,13 @@ fn floor_anchors(
 
 impl Engine {
     /// Assess a token through the overlay oracle (manual wins, then probes).
-    pub async fn assessment(
-        &self,
-        token: Address,
-    ) -> Result<Option<TokenAssessment>> {
+    pub async fn assessment(&self, token: Address) -> Result<Option<TokenAssessment>> {
         let pools = self
             .market
-            .pools_for(token, &[self.config.wrapped_native(), self.config.settlement_asset()])
+            .pools_for(
+                token,
+                &[self.config.wrapped_native(), self.config.settlement_asset()],
+            )
             .await?
             .map(|h| h.value.as_ref().clone())
             .unwrap_or_default();
@@ -223,7 +231,12 @@ impl Engine {
     pub async fn reference_price(&self, token: Address) -> Option<U256> {
         let settle = self.config.settlement_asset();
         let wn = self.config.wrapped_native();
-        let hit = self.market.pools_for(token, &[settle, wn]).await.ok().flatten();
+        let hit = self
+            .market
+            .pools_for(token, &[settle, wn])
+            .await
+            .ok()
+            .flatten();
         let pools = hit.map(|h| h.value.as_ref().clone()).unwrap_or_default();
         let mut best: Option<(U256, u128)> = None;
         for key in pools {
@@ -289,15 +302,17 @@ impl Engine {
                 settled += *amount;
                 continue;
             }
-            match self.settle_asset_into(*asset, *amount, settlement, &pool_list).await {
+            match self
+                .settle_asset_into(*asset, *amount, settlement, &pool_list)
+                .await
+            {
                 Ok(out) => settled += out,
                 Err(_) => {
                     residue.insert(*asset, *amount);
                 }
             }
         }
-              let wrapped_native_residue =
-            residue.get(&wrapped_native).copied().unwrap_or(U256::ZERO);
+        let wrapped_native_residue = residue.get(&wrapped_native).copied().unwrap_or(U256::ZERO);
 
         let reference = self.reference_price(route.token_in()).await;
         let normalized = if quote.quote_asset == settlement {
@@ -310,8 +325,11 @@ impl Engine {
                 U256::from(10).pow(U256::from(18)),
             )?
         };
-        let swap_price =
-            crate::venues::mul_div_floor(normalized, U256::from(10).pow(U256::from(18)), route.amount_in())?;
+        let swap_price = crate::venues::mul_div_floor(
+            normalized,
+            U256::from(10).pow(U256::from(18)),
+            route.amount_in(),
+        )?;
         let anchors = floor_anchors(route.amount_in(), reference, swap_price, target_price_1e18);
         let floor_res = self.floor.min_out(route.amount_in(), &anchors)?;
 
@@ -319,7 +337,9 @@ impl Engine {
             .assessment(route.token_in())
             .await?
             .unwrap_or_else(|| crate::safety::benign_assessment(route.token_in()));
-        let verdict = self.policy.pre_send_gate(&quote, &assessment, floor_res.min_out);
+        let verdict = self
+            .policy
+            .pre_send_gate(&quote, &assessment, floor_res.min_out);
 
         Ok(SimResult {
             settled,
@@ -347,7 +367,9 @@ impl Engine {
                 .iter()
                 .find(|p| p.other(asset) == settlement)
                 .cloned()
-                .ok_or_else(|| EngineError::Settlement("no wrapped-native settlement pool".into()))?
+                .ok_or_else(|| {
+                    EngineError::Settlement("no wrapped-native settlement pool".into())
+                })?
         } else {
             let pools = self
                 .market
@@ -410,8 +432,10 @@ impl Engine {
         out.push_str(&format!("impact    {:.2}%\n", quote.impact_pct));
         out.push_str(&format!(
             "floor     REFERENCE {} · SWAP {} → min-out {}\n",
-            reference.map(|p| (p / U256::from(10).pow(U256::from(12))).to_string()).unwrap_or_else(|| "—".into()),
-            (swap_price / U256::from(10).pow(U256::from(12))).to_string(),
+            reference
+                .map(|p| (p / U256::from(10).pow(U256::from(12))).to_string())
+                .unwrap_or_else(|| "—".into()),
+            swap_price / U256::from(10).pow(U256::from(12)),
             floor_res.min_out
         ));
         out.push_str(&format!("safety    {}\n", gate.label()));
@@ -433,11 +457,16 @@ impl Engine {
                 Err(_) => None,
             })
             .collect();
-        ranked.sort_by(|a, b| b.0.net_out.cmp(&a.0.net_out));
+        ranked.sort_by_key(|a| std::cmp::Reverse(a.0.net_out));
 
-        let mut out = String::from("#  net(settle out)   route                                  verdict\n");
+        let mut out =
+            String::from("#  net(settle out)   route                                  verdict\n");
         for (i, (quote, route)) in ranked.iter().enumerate() {
-            let mut verdict = if i == 0 { "best".to_string() } else { "ok".to_string() };
+            let mut verdict = if i == 0 {
+                "best".to_string()
+            } else {
+                "ok".to_string()
+            };
             if let Some(a) = &assessment {
                 let gate = self.policy.assess_gate(a);
                 if !gate.is_allow() {
@@ -490,13 +519,18 @@ impl Engine {
                     AssessmentSource::Probe => "sim probe",
                     AssessmentSource::Manual => "manual",
                 },
-                a.probe_block.map(|b| format!(" block {b}")).unwrap_or_default()
+                a.probe_block
+                    .map(|b| format!(" block {b}"))
+                    .unwrap_or_default()
             )),
             None => out.push_str("tax        unassessed (no probeable pool)\n"),
         }
         let pools = self
             .market
-            .pools_for(token, &[self.config.wrapped_native(), self.config.settlement_asset()])
+            .pools_for(
+                token,
+                &[self.config.wrapped_native(), self.config.settlement_asset()],
+            )
             .await?
             .map(|h| h.value.as_ref().clone())
             .unwrap_or_default();
@@ -546,14 +580,27 @@ impl Engine {
         out.push_str(&format!(
             "residue    WETH {}  {}\n",
             sim.wrapped_native_residue,
-            if sim.wrapped_native_residue.is_zero() { "✓" } else { "✗" }
+            if sim.wrapped_native_residue.is_zero() {
+                "✓"
+            } else {
+                "✗"
+            }
         ));
-        out.push_str(&format!("floor      min-out {} (target anchor {})\n",
+        out.push_str(&format!(
+            "floor      min-out {} (target anchor {})\n",
             sim.min_out,
-            if target_price_1e18.is_some() { "supplied" } else { "none" }
+            if target_price_1e18.is_some() {
+                "supplied"
+            } else {
+                "none"
+            }
         ));
-        out.push_str(&format!("impact     {:.2}% (cap {:.2}%)\n", sim.impact_pct, self.policy.impact_cap_pct));
-        out.push_str(&format!("verdict    {} (sim only — {})",
+        out.push_str(&format!(
+            "impact     {:.2}% (cap {:.2}%)\n",
+            sim.impact_pct, self.policy.impact_cap_pct
+        ));
+        out.push_str(&format!(
+            "verdict    {} (sim only — {})",
             sim.verdict.label(),
             self.config.effective_mode().banner()
         ));
@@ -580,7 +627,7 @@ pub fn fmt_amount(raw: U256, _symbol: &str) -> String {
     let mut out = String::new();
     let bytes = s.as_bytes();
     for (i, c) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i) % 3 == 0 {
+        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(*c as char);

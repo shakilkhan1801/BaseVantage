@@ -3,8 +3,8 @@ use std::hash::Hash;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 
 use crate::error::{EngineError, Result};
 
@@ -67,7 +67,11 @@ pub struct Labeled<T> {
 
 impl<T> Clone for Labeled<T> {
     fn clone(&self) -> Self {
-        Self { value: self.value.clone(), source: self.source, fetched_at: self.fetched_at }
+        Self {
+            value: self.value.clone(),
+            source: self.source,
+            fetched_at: self.fetched_at,
+        }
     }
 }
 
@@ -132,7 +136,9 @@ where
     /// Raw entry peek (even stale) — used by persistence and tests.
     pub fn peek(&self, key: &K) -> Option<(Option<Arc<V>>, Source, Instant, Tier)> {
         let entries = self.entries.lock().expect("cache poisoned");
-        entries.get(key).map(|e| (e.value.clone(), e.source, e.fetched_at, e.tier))
+        entries
+            .get(key)
+            .map(|e| (e.value.clone(), e.source, e.fetched_at, e.tier))
     }
 
     pub fn insert(&self, key: K, value: V, source: Source, tier: Tier) -> Labeled<V> {
@@ -144,16 +150,30 @@ where
         let fetched_at = Instant::now();
         self.entries.lock().expect("cache poisoned").insert(
             key,
-            Entry { value: Some(value.clone()), source, fetched_at, tier },
+            Entry {
+                value: Some(value.clone()),
+                source,
+                fetched_at,
+                tier,
+            },
         );
-        Labeled { value, source, fetched_at }
+        Labeled {
+            value,
+            source,
+            fetched_at,
+        }
     }
 
     /// Record a confirmed absence under the negative tier.
     pub fn insert_negative(&self, key: K, source: Source) {
         self.entries.lock().expect("cache poisoned").insert(
             key,
-            Entry { value: None, source, fetched_at: Instant::now(), tier: Tier::Negative },
+            Entry {
+                value: None,
+                source,
+                fetched_at: Instant::now(),
+                tier: Tier::Negative,
+            },
         );
     }
 
@@ -163,8 +183,13 @@ where
     }
 
     /// Hit-or-single-flight-fetch. `Ok(None)` means a fresh negative hit.
-    pub async fn get_or_fetch<F>(&self, key: K, tier: Tier, source: Source, fetch: F)
-    -> Result<Option<Labeled<V>>>
+    pub async fn get_or_fetch<F>(
+        &self,
+        key: K,
+        tier: Tier,
+        source: Source,
+        fetch: F,
+    ) -> Result<Option<Labeled<V>>>
     where
         F: std::future::Future<Output = Result<Option<V>>> + Send + 'static,
     {
@@ -206,7 +231,9 @@ where
             .expect("cache poisoned")
             .iter()
             .filter_map(|(k, e)| {
-                e.value.clone().map(|v| (k.clone(), v, e.source, e.fetched_at, e.tier))
+                e.value
+                    .clone()
+                    .map(|v| (k.clone(), v, e.source, e.fetched_at, e.tier))
             })
             .collect()
     }
@@ -215,7 +242,12 @@ where
     pub fn restore(&self, key: K, value: Arc<V>, source: Source, tier: Tier, fetched_at: Instant) {
         self.entries.lock().expect("cache poisoned").insert(
             key,
-            Entry { value: Some(value), source, fetched_at, tier },
+            Entry {
+                value: Some(value),
+                source,
+                fetched_at,
+                tier,
+            },
         );
     }
 }

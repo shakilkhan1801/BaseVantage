@@ -48,7 +48,10 @@ pub struct Quote {
 impl Quote {
     /// Pin this quote at confirm with the floor-derived min-out.
     pub fn pin(self, min_out: U256) -> PinnedQuote {
-        PinnedQuote { quote: self, min_out }
+        PinnedQuote {
+            quote: self,
+            min_out,
+        }
     }
 }
 
@@ -95,11 +98,16 @@ pub fn net_out(
     wrapped_native_price_1e18: U256,
     net: &NetInputs,
 ) -> Result<(U256, U256, U256, U256)> {
-    let normalized = normalize(gross, quote_asset, settlement_asset, wrapped_native, wrapped_native_price_1e18)?;
+    let normalized = normalize(
+        gross,
+        quote_asset,
+        settlement_asset,
+        wrapped_native,
+        wrapped_native_price_1e18,
+    )?;
     let tax = mul_frac(normalized, net.sell_tax_bps, 10_000)?;
     let gas_cost = net.gas_units * net.gas_price_wei;
-    let gas_in_settle =
-        crate::venues::mul_div_floor(gas_cost, wrapped_native_price_1e18, E18)?;
+    let gas_in_settle = crate::venues::mul_div_floor(gas_cost, wrapped_native_price_1e18, E18)?;
     let deductions = tax + gas_in_settle;
     let net = normalized.saturating_sub(deductions);
     Ok((normalized, tax, gas_in_settle, net))

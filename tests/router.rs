@@ -4,8 +4,8 @@
 mod common;
 
 use alloy::primitives::U256;
-use basevantage::router::quote::normalize;
 use basevantage::router::PinnedQuote;
+use basevantage::router::quote::normalize;
 
 use common::*;
 
@@ -34,20 +34,42 @@ async fn best_route_max_net_usdc_out() {
             },
         );
     }
-      market.inject_state(key_direct.clone(), v2_state(1_000_000_000_000_000_000_000, 2_923_000_000), basevantage::market::Source::ChainRpc);
-    market.inject_state(key_tw.clone(), v2_state(1_000_000_000_000_000_000_000, 1_000_000_000_000_000_000), basevantage::market::Source::ChainRpc);
-    market.inject_state(key_wu.clone(), v2_state(100_000_000_000_000_000_000, 300_000_000_000), basevantage::market::Source::ChainRpc);
+    market.inject_state(
+        key_direct.clone(),
+        v2_state(1_000_000_000_000_000_000_000, 2_923_000_000),
+        basevantage::market::Source::ChainRpc,
+    );
+    market.inject_state(
+        key_tw.clone(),
+        v2_state(1_000_000_000_000_000_000_000, 1_000_000_000_000_000_000),
+        basevantage::market::Source::ChainRpc,
+    );
+    market.inject_state(
+        key_wu.clone(),
+        v2_state(100_000_000_000_000_000_000, 300_000_000_000),
+        basevantage::market::Source::ChainRpc,
+    );
 
     let net = engine.net_inputs(0, U256::from(150_000)).await.unwrap();
-    let outcomes = engine.router.quotes(TOKEN, tokens(100), &net).await.unwrap();
+    let outcomes = engine
+        .router
+        .quotes(TOKEN, tokens(100), &net)
+        .await
+        .unwrap();
 
     let usdc_out: Vec<_> = outcomes
         .iter()
         .filter_map(|o| o.outcome.as_ref().ok())
         .filter(|q| q.quote_asset == USDC)
         .collect();
-    let direct = usdc_out.iter().find(|q| q.route.hops.len() == 1).expect("direct route");
-    let two_hop = usdc_out.iter().find(|q| q.route.hops.len() == 2).expect("2-hop route");
+    let direct = usdc_out
+        .iter()
+        .find(|q| q.route.hops.len() == 1)
+        .expect("direct route");
+    let two_hop = usdc_out
+        .iter()
+        .find(|q| q.route.hops.len() == 2)
+        .expect("2-hop route");
 
     // The whole point: gross ordering and net ordering disagree.
     assert!(
@@ -64,20 +86,28 @@ async fn best_route_max_net_usdc_out() {
     );
 
     // Best route = max NET out across all candidates (normalized).
-    let best = engine.router.best_route(TOKEN, tokens(100), &net).await.unwrap().expect("best");
+    let best = engine
+        .router
+        .best_route(TOKEN, tokens(100), &net)
+        .await
+        .unwrap()
+        .expect("best");
     let max_net = outcomes
         .iter()
         .filter_map(|o| o.outcome.as_ref().ok())
         .map(|q| q.net_out)
         .max()
         .unwrap();
-    assert_eq!(best.net_out, max_net, "best route must carry the maximum net");
+    assert_eq!(
+        best.net_out, max_net,
+        "best route must carry the maximum net"
+    );
     assert_ne!(
         best.route.hops.len(),
         two_hop.route.hops.len(),
         "the higher-gross route must lose"
     );
-  }
+}
 
 #[tokio::test]
 async fn mixed_quote_assets_normalized_never_raw_compared() {
@@ -101,13 +131,32 @@ async fn mixed_quote_assets_normalized_never_raw_compared() {
     // Direct USDC pool is priced above the WETH route, but the WETH route's
     // RAW amount (18 decimals) dwarfs the USDC amount (6 decimals): a raw
     // comparison would pick the wrong route.
-    market.inject_state(key_direct.clone(), v2_state(1_000_000_000_000_000_000_000, 3_080_000_000), basevantage::market::Source::ChainRpc);
-    market.inject_state(key_tw.clone(), v2_state(1_000_000_000_000_000_000_000, 1_000_000_000_000_000_000), basevantage::market::Source::ChainRpc);
-    market.inject_state(key_wu.clone(), v2_state(100_000_000_000_000_000_000, 300_000_000_000), basevantage::market::Source::ChainRpc);
+    market.inject_state(
+        key_direct.clone(),
+        v2_state(1_000_000_000_000_000_000_000, 3_080_000_000),
+        basevantage::market::Source::ChainRpc,
+    );
+    market.inject_state(
+        key_tw.clone(),
+        v2_state(1_000_000_000_000_000_000_000, 1_000_000_000_000_000_000),
+        basevantage::market::Source::ChainRpc,
+    );
+    market.inject_state(
+        key_wu.clone(),
+        v2_state(100_000_000_000_000_000_000, 300_000_000_000),
+        basevantage::market::Source::ChainRpc,
+    );
 
     let net = engine.net_inputs(0, U256::from(150_000)).await.unwrap();
-    let outcomes = engine.router.quotes(TOKEN, tokens(100), &net).await.unwrap();
-    let quotes: Vec<_> = outcomes.iter().filter_map(|o| o.outcome.as_ref().ok()).collect();
+    let outcomes = engine
+        .router
+        .quotes(TOKEN, tokens(100), &net)
+        .await
+        .unwrap();
+    let quotes: Vec<_> = outcomes
+        .iter()
+        .filter_map(|o| o.outcome.as_ref().ok())
+        .collect();
 
     let weth_single = quotes
         .iter()
@@ -143,7 +192,12 @@ async fn mixed_quote_assets_normalized_never_raw_compared() {
     assert_eq!(weth_single.normalized_out, normalized_weth);
 
     // And the router picks by normalized net, not by raw amount.
-    let best = engine.router.best_route(TOKEN, tokens(100), &net).await.unwrap().expect("best");
+    let best = engine
+        .router
+        .best_route(TOKEN, tokens(100), &net)
+        .await
+        .unwrap()
+        .expect("best");
     assert_eq!(best.quote_asset, USDC);
     assert_eq!(best.net_out, usdc_single.net_out);
 }
@@ -156,17 +210,41 @@ fn pin_revalidate_refuses_stale_or_regressed() {
     let fresh = quote_fixture(route.clone(), tokens(300), USDC, 0.1);
     let min_out = tokens(290);
     let pinned = fresh.pin(min_out);
-    assert!(pinned.revalidate(quote_fixture(route.clone(), tokens(295), USDC, 0.1), std::time::Duration::from_secs(30)).is_ok());
+    assert!(
+        pinned
+            .revalidate(
+                quote_fixture(route.clone(), tokens(295), USDC, 0.1),
+                std::time::Duration::from_secs(30)
+            )
+            .is_ok()
+    );
 
     // Re-quote below the pinned floor: refuse.
     let regressed = quote_fixture(route.clone(), tokens(280), USDC, 0.1);
-    assert!(pinned.revalidate(regressed, std::time::Duration::from_secs(30)).is_err());
+    assert!(
+        pinned
+            .revalidate(regressed, std::time::Duration::from_secs(30))
+            .is_err()
+    );
 
     // Stale pin: refuse regardless of price.
     let mut stale = quote_fixture(route, tokens(300), USDC, 0.1);
     stale.pinned_at = Instant::now() - std::time::Duration::from_secs(60);
-    let stale = PinnedQuote { quote: stale, min_out };
-    assert!(stale
-        .revalidate(quote_fixture(single_hop_route(v2_key(POOL_A, TOKEN, USDC), TOKEN, USDC, tokens(100)), tokens(300), USDC, 0.1), std::time::Duration::from_secs(30))
-        .is_err());
+    let stale = PinnedQuote {
+        quote: stale,
+        min_out,
+    };
+    assert!(
+        stale
+            .revalidate(
+                quote_fixture(
+                    single_hop_route(v2_key(POOL_A, TOKEN, USDC), TOKEN, USDC, tokens(100)),
+                    tokens(300),
+                    USDC,
+                    0.1
+                ),
+                std::time::Duration::from_secs(30)
+            )
+            .is_err()
+    );
 }

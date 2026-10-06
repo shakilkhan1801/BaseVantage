@@ -79,10 +79,13 @@ fn effective_mode_observed() {
     let observe = Config::from_toml_str(VALID).unwrap();
     assert_eq!(observe.effective_mode(), Mode::Observe);
     let banner = observe.effective_mode().banner();
-    assert!(banner.contains("observe"), "banner must state the effective mode: {banner}");
+    assert!(
+        banner.contains("observe"),
+        "banner must state the effective mode: {banner}"
+    );
 
-    let execute = Config::from_toml_str(&VALID.replace("mode = \"observe\"", "mode = \"execute\""))
-        .unwrap();
+    let execute =
+        Config::from_toml_str(&VALID.replace("mode = \"observe\"", "mode = \"execute\"")).unwrap();
     assert_eq!(execute.effective_mode(), Mode::Execute);
     assert!(execute.effective_mode().banner().contains("execute"));
 }

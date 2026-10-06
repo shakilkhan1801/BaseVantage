@@ -5,7 +5,7 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use alloy::primitives::{keccak256, Address, Bytes, U256};
+use alloy::primitives::{Address, Bytes, U256, keccak256};
 use basevantage::chain::testing::{CountingAdapter, ScriptedChain};
 use basevantage::chain::{DynChain, PoolEvent};
 use basevantage::market::{MarketData, NoopStatsSource, PoolMeta, Source, TtlConfig};
@@ -35,7 +35,10 @@ async fn repeat_quote_near_zero_rpc_cache_and_single_flight() {
         if data.len() >= 4 && data[..4] == selector {
             // Slow response on purpose: concurrent misses must share it.
             std::thread::sleep(Duration::from_millis(100));
-            return Ok(encode_reserves(1_000_000_000_000_000_000_000, 3_000_000_000_000));
+            return Ok(encode_reserves(
+                1_000_000_000_000_000_000_000,
+                3_000_000_000_000,
+            ));
         }
         panic!("unexpected call in offline test: {data:?}")
     });
@@ -68,7 +71,12 @@ async fn repeat_quote_near_zero_rpc_cache_and_single_flight() {
     for key in [&key_ab, &key_bc] {
         market.inject_meta(
             (*key).clone(),
-            PoolMeta { decimals0: 18, decimals1: 18, stable: false, fee_bps: 30 },
+            PoolMeta {
+                decimals0: 18,
+                decimals1: 18,
+                stable: false,
+                fee_bps: 30,
+            },
         );
     }
     market.inject_state(
@@ -88,7 +96,11 @@ async fn repeat_quote_near_zero_rpc_cache_and_single_flight() {
 
     // 50 sequential repeat quotes: pure cache reads.
     for _ in 0..50 {
-        router.best_route(TOKEN, amount, &net).await.expect("quote").expect("a route");
+        router
+            .best_route(TOKEN, amount, &net)
+            .await
+            .expect("quote")
+            .expect("a route");
     }
     // 50 concurrent repeat quotes on the same keys: still pure cache reads.
     let results =
@@ -105,15 +117,29 @@ async fn repeat_quote_near_zero_rpc_cache_and_single_flight() {
 
     // Invalidation (e.g. a WS event) forces exactly one refetch even under
     // concurrent readers: single-flight shares the in-flight request.
-    market.apply_event(&PoolEvent::SlotUpdate { pool: POOL_A, block: 1 });
-    let results =
-        futures::future::join_all((0..50).map(|_| market.pool_state(&key_ab))).await;
+    market.apply_event(&PoolEvent::SlotUpdate {
+        pool: POOL_A,
+        block: 1,
+    });
+    let results = futures::future::join_all((0..50).map(|_| market.pool_state(&key_ab))).await;
     for r in results {
         r.expect("state fetch").expect("state exists");
     }
-    assert_eq!(counting.call_count(), 1, "50 concurrent misses must share one RPC fetch");
+    assert_eq!(
+        counting.call_count(),
+        1,
+        "50 concurrent misses must share one RPC fetch"
+    );
 
     // And the refetched value is cached again.
-    market.pool_state(&key_ab).await.expect("cached").expect("state exists");
-    assert_eq!(counting.call_count(), 1, "subsequent reads hit the cache again");
+    market
+        .pool_state(&key_ab)
+        .await
+        .expect("cached")
+        .expect("state exists");
+    assert_eq!(
+        counting.call_count(),
+        1,
+        "subsequent reads hit the cache again"
+    );
 }

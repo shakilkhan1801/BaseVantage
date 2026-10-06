@@ -57,7 +57,10 @@ pub struct ConfigViolation {
 
 impl ConfigViolation {
     pub fn new(key: impl Into<String>, message: impl Into<String>) -> Self {
-        Self { key: key.into(), message: message.into() }
+        Self {
+            key: key.into(),
+            message: message.into(),
+        }
     }
 }
 
@@ -70,7 +73,10 @@ pub struct RefusalCard {
 
 impl RefusalCard {
     pub fn new(title: impl Into<String>) -> Self {
-        Self { title: title.into(), lines: Vec::new() }
+        Self {
+            title: title.into(),
+            lines: Vec::new(),
+        }
     }
 
     pub fn line(mut self, line: impl Into<String>) -> Self {

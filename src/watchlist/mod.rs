@@ -1,6 +1,6 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use alloy::primitives::Address;
@@ -157,7 +157,7 @@ impl Watchlist {
                 .map(|d| d.as_millis())
                 .unwrap_or(0),
             note: None,
-        };        
+        };
         entries.push(entry.clone());
         let _ = self.store.save(&entries);
         EnrolOutcome::Enrolled(entry)
