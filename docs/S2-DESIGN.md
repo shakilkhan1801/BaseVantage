@@ -12,8 +12,33 @@ else waits for later batches.
 
 **S2 delivers:** the Telegram surface (menus, cards, buttons), wallets, the
 token/dossier card, buy and sell with review + receipt cards, positions,
-watchlist, **target-price sell orders** (the S2 TARGET anchor), settings, and
-the `execute` mode switch with safety gates.
+watchlist, **target-price buy and sell orders** (limit orders, the S2 TARGET
+anchor), settings, and the `execute` mode switch with safety gates.
+
+### Target-order price guarantees (both directions)
+
+A target order states an amount and a limit price. The bot monitors net
+quotes and fires only inside the bound, and the bound is also enforced
+on-chain, so a fill can never violate it:
+
+- **Target BUY** (spend `Q` quote-asset, limit `P`): fires only when the net
+  price is **≤ P**; the swap is sent with
+  `min_out(tokens) = max(anchor floors, Q ÷ P)` — it may fill at a *better*
+  price (more tokens) but never receives fewer tokens than `Q ÷ P`, i.e.
+  never pays more than `P`.
+- **Target SELL** (sell `A` tokens, limit `P`): fires only when the net price
+  is **≥ P**; the swap is sent with
+  `min_out(quote) = max(anchor floors, P × A)` — it may fill better but never
+  receives less than `P × A`, i.e. never sells below `P`.
+
+Three independent layers hold the line: (1) the watcher triggers on the net
+price (after tax and gas, the numbers the user actually receives); (2) the
+limit is compiled into the swap calldata as `min-out`, so a worse fill
+**reverts on-chain** — a race between trigger and broadcast costs a retry,
+never a bad price; (3) the engine re-checks the fill in sim before declaring
+a receipt. The sell-side rule is already engine-tested in S1
+(`target_order_floor_never_below_target`); S2 adds the mirrored buy-side
+engine rule and its test.
 
 **Deliberately NOT in S2** (S3+ or never): sniping/launch filters, copy
 trading, DCA, multi-wallet portfolios, referrals, charts, multi-chain,
@@ -144,15 +169,19 @@ Telegram surface (`tests/tg_*.rs`, mock `TgApi`):
 Orders and wallet:
 15. `tg::target_order_min_out_never_below_target` (bot path mirrors the S1
     invariant through the full render+execute pipeline)
-16. `tg::target_order_fires_notifies_with_receipt_and_closes`
-17. `tg::target_order_cancel_and_list_states`
-18. `tg::wallet_store_encrypts_keys_at_rest`
-19. `tg::export_key_requires_explicit_confirm_and_warns`
-20. `tg::created_key_shown_once_and_never_again`
+16. `tg::target_buy_min_tokens_never_below_spend_over_target` (mirrored rule:
+    buy fills never cost more than the target price)
+17. `tg::target_order_never_fires_outside_bound` (buy never above its limit,
+    sell never below theirs — trigger + calldata both checked)
+18. `tg::target_order_fires_notifies_with_receipt_and_closes`
+19. `tg::target_order_cancel_and_list_states`
+20. `tg::wallet_store_encrypts_keys_at_rest`
+21. `tg::export_key_requires_explicit_confirm_and_warns`
+22. `tg::created_key_shown_once_and_never_again`
 
 Config/gates:
-21. `config::telegram_token_required_from_env_not_file`
-22. `tg::execute_toggle_requires_reconfirm_warning`
+23. `config::telegram_token_required_from_env_not_file`
+24. `tg::execute_toggle_requires_reconfirm_warning`
 
 ## 5. Sample screens
 

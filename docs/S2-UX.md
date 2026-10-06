@@ -69,7 +69,7 @@ Your wallet is stored encrypted. We will show the key once — save it.
 | Button | Callback | What happens |
 | --- | --- | --- |
 | Create Wallet | `w:create` | Generates a key, shows the address **and the key exactly once** with a "copy it now" warning, then opens the Main menu. Key is stored encrypted at rest. |
-| Import Wallet | `w:import` | Switches the panel to "paste your private key" text-input state (see §8). On success → Main menu. |
+| Import Wallet | `w:import` | Switches the panel to "paste your private key" text-input state (see §12). On success → Main menu. |
 | Explore First | `menu` | Main menu with no wallet; buy/sell buttons then lead to a "create or import a wallet first" card. |
 
 Every later `/start` opens the Main menu directly (disclaimer lives in Help).
@@ -91,10 +91,10 @@ network Base · rpc healthy
 | --- | --- | --- |
 | Trade | `nav:trade` | Trade entry screen (§3): instructions + token shortcuts |
 | Positions | `nav:pos` | Positions screen (§7) |
-| Orders | `nav:ord` | Target orders screen (§9) |
-| Watchlist | `nav:wl` | Watchlist screen (§10) |
-| Wallet | `nav:wal` | Wallet screen (§11) |
-| Settings | `nav:set` | Settings screen (§12) |
+| Orders | `nav:ord` | Target orders screen (§8) |
+| Watchlist | `nav:wl` | Watchlist screen (§9) |
+| Wallet | `nav:wal` | Wallet screen (§10) |
+| Settings | `nav:set` | Settings screen (§11) |
 | Help | `nav:help` | Flows summary + disclaimer + "invariants tested" line |
 
 The header block (wallet / mode / network) is identical on the menu and is
@@ -135,8 +135,8 @@ verdict allow · sources chain-rpc 3s · mode observe
 | --- | --- | --- |
 | Buy 0.05 / 0.1 / 0.25 | `t:buy:<eth>` | Builds a buy order of that ETH size → Review card (§6). Presets come from Settings. |
 | Buy custom ▸ | `t:buyx` | "Type the amount in ETH" text-input state → Review card. |
-| Sell ▸ | `t:sell` | Sell sizing (§8): only enabled when the wallet holds the token, else one-line "nothing to sell" card. |
-| Target ▸ | `t:tgt` | Target order create (§9). |
+| Sell ▸ | `t:sell` | Sell sizing (§7): only enabled when the wallet holds the token, else one-line "nothing to sell" card. |
+| Target ▸ | `t:tgt` | Target order create (§8). |
 | ⟳ Refresh | `tok:<addr>` | Re-renders the same card with fresh quotes/verdicts (in place). |
 | ← Menu | `menu` | Main menu. |
 
@@ -182,7 +182,7 @@ confirm window 60s
 
 | Button | Callback | What happens |
 | --- | --- | --- |
-| Confirm | `ord:ok:<id>` | In **observe**: renders the observe-refusal card (§7). In **execute**: in-place "executing" card → engine `execute` → Receipt. Idempotent: a second tap answers "already sent" and does nothing. After 60s the panel becomes the expired card (`[Order expired] [Start over]`). |
+| Confirm | `ord:ok:<id>` | In **observe**: renders the observe-refusal card (§6). In **execute**: in-place "executing" card → engine `execute` → Receipt. Idempotent: a second tap answers "already sent" and does nothing. After 60s the panel becomes the expired card (`[Order expired] [Start over]`). |
 | Cancel | `ord:cancel:<id>` | Order discarded, token card re-rendered. |
 
 **Receipt card:**
@@ -243,35 +243,51 @@ verdict allow · impact of full exit 0.31%
 | Custom ▸ | `t:sellx` | Typed amount → Review card. |
 | TOKEN ▸ | `tok:<addr>` | Token card. |
 
-## 8. Target orders (the S2 order type)
+## 8. Target orders (limit orders — buy AND sell)
+
+A target order = direction + amount + limit price. The guarantee is enforced
+twice (watcher trigger on the net price **and** `min-out` compiled into the
+calldata): a buy **never** fills above its limit — it receives at least
+`spend ÷ limit` tokens and better prices are always accepted; a sell **never**
+fills below its limit — it receives at least `limit × amount` quote-asset and
+better prices are always accepted. A race between trigger and broadcast
+reverts instead of filling worse; the order stays open and retries.
 
 ```
 BaseVantage · orders
-#1  TOKEN · sell 15,000 · target 0.00000015 · watching
-#2  DEGEN · sell all  · target 0.00021 · fired 12m ago
-#3  BRETT · sell 500  · target 0.0004 · cancelled
+#1  SELL TOKEN · 15,000  · limit 0.00000015 · watching
+#2  BUY  DEGEN · 0.1 ETH · limit 0.00018    · watching
+#3  SELL DEGEN · all     · limit 0.00021    · fired 12m ago
+#4  BUY  BRETT · 0.25 ETH · limit 0.0004    · cancelled
 
 [New Target Order] [⟳ Refresh] [← Menu]
 ```
 
-Per row: `[#1 ▸]` opens its detail with `[Cancel Order]` (watching only) and
-`[TOKEN ▸]`. "New Target Order" flow:
+Per row: `[#N ▸]` opens its detail with the exact bound ("will buy only at
+≤ 0.00018" / "will sell only at ≥ 0.00021"), `[Cancel Order]` (watching only)
+and `[TOKEN ▸]`. "New Target Order" flow:
 
-1. Pick the token (positions/watchlist shortcuts or paste CA).
-2. Amount: `[All holdings]` or typed amount.
-3. Target price: typed (USDC per token) — the only text input in the flow.
-4. Review card:
+1. Direction: `[Buy ▸] [Sell ▸]` (preselected from the token card: sell when
+   the wallet holds the token, buy otherwise).
+2. Pick the token (positions/watchlist shortcuts or paste CA).
+3. Amount: for sell `[All holdings]` or typed token amount; for buy a typed
+   quote-asset amount (ETH/USDC to spend).
+4. Limit price: typed (USDC per token) — the only text input in the flow.
+5. Review card:
 
 ```
-BaseVantage · REVIEW · target sell
-token    TOKEN · amount 15,000
-target   0.00000015 USDC  (= 2.25 USDC total)
-min-out  max(anchor floors, target x amount) — never below target
-fires    when a live route nets >= min-out
+BaseVantage · REVIEW · target buy
+token    DEGEN · spend 0.1 ETH (≈ 268.42 USDC)
+limit    0.00018 USDC  →  min tokens 1,491,222
+min-out  max(anchor floors, spend ÷ limit) — never fewer tokens
+fires    when a live route prices ≤ 0.00018
 verdict  allow · mode observe (fires as a review prompt)
 
 [Confirm] [Cancel]
 ```
+
+The sell variant shows `limit × amount` and "never fewer quote-asset units":
+`fires when a live route prices ≥ limit`.
 
 | Button | Callback | What happens |
 | --- | --- | --- |
@@ -279,14 +295,22 @@ verdict  allow · mode observe (fires as a review prompt)
 | #N ▸ | `ord:<id>` | Order detail + Cancel. |
 | Cancel Order | `ord:cancel:<id>` | Status → cancelled (L7 rule: the bot never silently removes anything). |
 
-**Firing behaviour (notification):** the watcher (§13) polls the engine; when
-the target is met it fires the order with the engine floor rule and posts:
+**Firing behaviour (notification):** the watcher polls the engine; when
+the bound is met it fires the order with the engine floor rule and posts:
 
 ```
 BaseVantage · target order filled
-TOKEN · sold 15,000 at target 0.00000015
-filled  2.261 USDC >= min-out 2.25
+BUY DEGEN · 0.1 ETH at limit 0.00018
+got     1,502,410 DEGEN >= min 1,491,222 (paid ≤ limit)
 tx      0xdef456…  [View on Basescan]
+[TOKEN ▸] [Orders] [← Menu]
+```
+
+```
+BaseVantage · target order filled
+SELL TOKEN · sold 15,000 at limit 0.00000015
+filled  2.261 USDC >= min 2.25 (sold ≥ limit)
+tx      0xabc789…  [View on Basescan]
 [TOKEN ▸] [Orders] [← Menu]
 ```
 
