@@ -87,6 +87,17 @@ pub trait ChainAdapter: Send + Sync {
     async fn nonce(&self, account: Address) -> crate::error::Result<u64>;
     async fn call(&self, req: CallRequest) -> crate::error::Result<Bytes>;
     async fn estimate_gas(&self, req: CallRequest) -> crate::error::Result<u64>;
+    /// Broadcasts a signed raw transaction; returns its hash. The S2
+    /// execute path signs locally and hands over opaque bytes.
+    async fn send_raw(
+        &self,
+        raw: alloy::primitives::Bytes,
+    ) -> crate::error::Result<alloy::primitives::B256> {
+        let _ = raw;
+        Err(crate::error::EngineError::Rpc(
+            "send_raw: not supported by this adapter".to_string(),
+        ))
+    }
     /// WS-first event stream with RPC polling fallback.
     fn events(&self, filter: EventFilter) -> EventStream;
 }

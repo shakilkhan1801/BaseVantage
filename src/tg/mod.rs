@@ -2,6 +2,7 @@
 //! real HTTP client, and a recording mock for tests. All rendering lives in
 //! [`cards`]; all trading logic stays in the engine.
 
+pub mod adapter;
 pub mod cards;
 pub mod handlers;
 pub mod notify;

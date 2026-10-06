@@ -287,6 +287,20 @@ impl ChainAdapter for BaseChain {
             .await
     }
 
+    async fn send_raw(&self, raw: alloy::primitives::Bytes) -> Result<alloy::primitives::B256> {
+        self.pool
+            .with_provider(move |p| {
+                let raw = raw.clone();
+                async move {
+                    p.send_raw_transaction(&raw)
+                        .await
+                        .map_err(rpc_err)
+                        .map(|t| *t.tx_hash())
+                }
+            })
+            .await
+    }
+
     fn events(&self, filter: EventFilter) -> EventStream {
         crate::chain::ws::stream_events(self.ws_urls.clone(), filter, self.pool.clone())
     }
