@@ -140,9 +140,45 @@ double taps (all handlers idempotent, serialized per chat).
 
 ## 3. Security and honesty model
 
-- Wallet keys: encrypted at rest (XChaCha20-Poly1305 with a key from
-  `TG_WALLET_SECRETS_KEY` env), plaintext only in the one-time creation
-  message and behind the explicit export confirm.
+### Wallet key handling (the layered model)
+
+An automated trader must be able to sign while the user is offline, so the
+bot necessarily holds signing capability. The design minimizes what any
+single breach can take:
+
+1. **Generation** on the bot host from the OS CSPRNG (no third-party key
+   service, no network involvement). Users who do not trust the generation
+   host can **import a key made on their own machine** — generation then
+   never happens here.
+2. **At rest — the "database hacked" case:** each private key is sealed with
+   XChaCha20-Poly1305 under a random per-wallet data key (DEK). The DEK is
+   wrapped by a master key (KEK) that lives **outside the database**
+   (`TG_WALLET_SECRETS_KEY` in the environment / secret manager). A database
+   breach alone yields ciphertext that is useless without the KEK.
+3. **The user passphrase layer (opt-in, recommended):** the user's own
+   passphrase derives a wrapping key (Argon2id) over the DEK. With it, even a
+   full server + database compromise cannot decrypt the key — the bot itself
+   needs the passphrase typed per signing session. Tradeoff, stated plainly at
+   setup: a lost passphrase means a lost key (like a self-custody wallet).
+4. **In memory:** keys are decrypted only for the signing call and zeroized
+   after; never logged, never echoed; the creation message shows the key
+   exactly once; export requires the two-step confirm with warning.
+5. **Operational limits:** execute-mode chat allowlist (soft launch),
+   optional daily withdrawal cap, and a notification to the chat on every key
+   use, export, or withdrawal. The intended posture is a **small trading
+   float** in the bot, with the Withdraw button moving funds out to a
+   user-controlled wallet.
+
+**Honest limits (stated in-product too):** without the passphrase layer, an
+attacker who fully controls the runtime *and* the secret store can capture
+keys at generation or signing time — no software prevents this for a bot that
+signs automatically; this is the same custodial model every Telegram trading
+bot operates under. The passphrase layer plus minimal float is the practical
+defense. The bot never transmits keys anywhere, and "perfect" security is not
+claimed — "invariants tested" is.
+
+### Trading safety
+
 - `observe` mode never signs; `execute` requires the config flag **and** the
   user-facing toggle, each with its own warning text.
 - First-run message carries the standing risk disclaimer once. Claims follow
@@ -176,6 +212,9 @@ Orders and wallet:
 18. `tg::target_order_fires_notifies_with_receipt_and_closes`
 19. `tg::target_order_cancel_and_list_states`
 20. `tg::wallet_store_encrypts_keys_at_rest`
+20a. `tg::db_breach_without_kek_reveals_no_keys` (dump the store; decryption
+    must fail without the environment-held KEK)
+20b. `tg::passphrase_layer_blocks_decryption_without_passphrase`
 21. `tg::export_key_requires_explicit_confirm_and_warns`
 22. `tg::created_key_shown_once_and_never_again`
 
