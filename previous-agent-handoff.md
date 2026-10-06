@@ -172,6 +172,19 @@ the final planned batch was never applied (credits ran out).
      25-test list). The root `S1-DESIGN.md` that did land is the older
      pre-correction draft, so the design doc in this repo contradicts the code;
      the code implements the corrections and the code is right.
+- **UPDATE (2026-10-06): all five items above have been restored.** The user kept an
+  original backup of the agent's file writes (`original-old-agent-text.md` in this
+  repo, itself uploaded 2026-10-06) containing `docs/S1-DESIGN.md` in both versions
+  (the +211 pre-correction draft and the +226 corrected rewrite), `config.example.toml`
+  (+49), `.gitignore` (+3) and `README.md` (+17); those four were re-extracted
+  byte-for-byte and committed at their original paths, and the stale root
+  `S1-DESIGN.md` copy was removed (it survives in git history and in the backup).
+  `src/lib.rs` is not in the backup — but it **did exist** on the agent's machine:
+  the replay's own `cargo test` output shows `Running unittests src/lib.rs`
+  (transcript line 7132), so it was written with the scaffold in a step the replay
+  didn't render as a write op. It has been recreated as the nine module declarations
+  (`pub mod chain; config; error; harness; market; router; safety; venues;
+  watchlist;`) the module tree requires, and the crate compiles and tests green.
 - Minimal `src/lib.rs` needed to build (the file the session used):
   `pub mod chain; pub mod config; pub mod error; pub mod harness; pub mod market;
   pub mod router; pub mod safety; pub mod venues; pub mod watchlist;`
@@ -213,8 +226,8 @@ the final planned batch was never applied (credits ran out).
 
 ## 8. Remaining work to legitimately declare "S1 complete"
 
-1. Re-add `src/lib.rs` (and ideally `config.example.toml`, `README.md`, `.gitignore`,
-   the corrected `docs/S1-DESIGN.md`).
+1. ~~Re-add `src/lib.rs` (and ideally `config.example.toml`, `README.md`, `.gitignore`,
+   the corrected `docs/S1-DESIGN.md`)~~ — **done 2026-10-06**, see §5.
 2. Apply the 22 clippy fixes from §6 (most are mechanical), then
    `cargo clippy --all-targets -- -D warnings` clean.
 3. `cargo fmt` and commit the result.

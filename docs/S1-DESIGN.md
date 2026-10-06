@@ -1,15 +1,12 @@
 # BaseVantage — S1 Design Doc (engine core, no Telegram)
 
-Status: awaiting written approval. No feature code before approval.
+Status: APPROVED as the S1 implementation spec where consistent with the charter;
+where they differ, the charter wins. Corrections of 2026-10-05 applied.
 
-## 0. Charter status (flagged)
-
-The CHARTER referenced as "attached" did not arrive with the request: no attachment
-payload, nothing in Capy Drive, nothing in the repo (empty checkout, zero commits).
-This doc is therefore derived from the S1 batch specification in the request itself.
-When the charter lands, "code wins" conflicts will be flagged per instruction; at
-design time there is no code to compare against. Please re-attach the charter or
-approve this doc as the working spec.
+> Charter provenance note: the CHARTER document was referenced as attached but
+> never materialized (no attachment payload, empty drives, empty repo). See
+> `docs/CHARTER-PENDING.md`. This spec is the ratified working source of truth
+> plus the written corrections in the approval message.
 
 ## 1. Module layout
 
@@ -43,7 +40,7 @@ basevantage/
       mod.rs                 # best_route: max NET settlement-asset out
     safety/                  # L4
       assess.rs              # token assess: tax probe, honeypot probe
-      floor.rs               # floor module: TARGET anchor + SWAP anchor
+      floor.rs               # floor module: REFERENCE anchor + SWAP anchor (+ TARGET)
       impact.rs              # impact cap, pre-send refuse
       mod.rs                 # verdicts: Allow | Refuse(reason) | Block(reason)
     watchlist/               # L7
@@ -59,11 +56,12 @@ basevantage/
 ```
 
 Dependencies: `alloy` (RPC/WS/ABI), `tokio`, `serde`, `toml`, `clap`, `thiserror`,
-`tracing`. No ethers, no ORM: watchlist persistence is one JSON file behind a trait.
+`tracing`, `async-trait`, `futures`, `sha3`, `hex`. No ORM: watchlist persistence
+is one JSON file behind a trait.
 
 ## 2. Trait boundaries
 
-**L1 `ChainAdapter`** (object-safe where dynamic dispatch helps testing):
+**L1 `ChainAdapter`** (dyn-compatible via `async-trait`):
 
 ```rust
 trait ChainAdapter: Send + Sync {
@@ -83,7 +81,8 @@ what the ≈0-RPC cache test asserts against.
 
 **L2 `MarketData`** — the only read surface router/safety use. Every value leaves
 the cache tagged `(Source, Age)`: `Source ∈ {Registry, ChainRpc, WsEvent, External}`,
-printed by the CLI. TTL tiers: static pool metadata 24h, reserves 30s + event
+printed by the CLI. TTL tiers: static pool metadata 24h (persisted to disk so
+restarts don't re-fetch — file-backed snapshot of the tier), reserves 30s + event
 invalidation (WS Sync/Swap refreshes and marks fresh), stats 60s, negative results
 120s (missing pool / no-tax result won't hammer the RPC). Single-flight: concurrent
 misses on one key share one in-flight request.
@@ -102,13 +101,23 @@ normalized into the settlement asset (USDC for sells) before comparison — raw
 amounts across assets are never compared; `best_route` picks max NET out.
 
 **L4 safety** returns verdicts consumed at two gates: assess (tax/honeypot block
-before any route is offered) and pre-send (impact cap refuse, floor check). Floor
-module anchors twice — TARGET anchor: reference price of the target token from its
-deepest canonical pool; SWAP anchor: price implied by the route we actually cross.
-min-out = max(anchor-derived floors) with tolerance from config; a worse fill
-reverts (enforced via min-out in the swap calldata and checked again in sim).
-Fee-on-transfer tokens are refused on multi-hop v3 hops (exact-in accounting would
-lie).
+before any route is offered) and pre-send (impact cap refuse, floor check).
+
+Floor module (anchor naming per correction of 2026-10-05):
+
+- **REFERENCE anchor** — sanity floor derived from the target token's deepest
+  canonical pool (the former "TARGET anchor", renamed).
+- **SWAP anchor** — floor implied by the price of the route we actually cross.
+- **TARGET anchor** — the user's target price. Reserved for S2 target orders; the
+  S1 module accepts a supplied target value and enforces the invariant now.
+
+  `min-out = max(applicable anchors)`, applicable = REFERENCE and SWAP always, and
+`TARGET × amount` whenever a target is set. Invariant: for any target order,
+min-out is **never below `target × amount`**. min-out is enforced via the swap
+calldata and re-checked in sim; a worse fill reverts.
+
+Fee-on-transfer tokens are refused on multi-hop v3 hops (exact-in accounting
+would lie).
 
 **L7 `Watchlist`:** `enrol(token, provenance)`, `remove(id)` manual-only, `list()`.
 Dedupe order: address match → identical entry refused; symbol match with different
@@ -140,27 +149,28 @@ Settlement:
 9. `sim::multihop_sell_settles_usdc_and_wrapped_native_residue_zero`
 
 Safety:
-10. `safety::floor_target_anchor_worse_fill_reverts`
+10. `safety::floor_reference_anchor_worse_fill_reverts`
 11. `safety::floor_swap_anchor_worse_fill_reverts`
-12. `safety::impact_cap_refuses_pre_send`
-13. `safety::tax_token_blocked`
-14. `safety::honeypot_blocked`
-15. `safety::fee_on_transfer_rejected_multihop_v3`
+12. `safety::target_order_floor_never_below_target` — unit-level, supplied target value
+13. `safety::impact_cap_refuses_pre_send`
+14. `safety::tax_token_blocked`
+15. `safety::honeypot_blocked`
+16. `safety::fee_on_transfer_rejected_multihop_v3`
 
 Market:
-16. `market::repeat_quote_near_zero_rpc_cache_and_single_flight` — CountingAdapter: 50 sequential + 50 concurrent repeat quotes ⇒ ≤ 1 reserves RPC
+17. `market::repeat_quote_near_zero_rpc_cache_and_single_flight` — CountingAdapter: 50 sequential + 50 concurrent repeat quotes ⇒ ≤ 1 reserves RPC
 
 Watchlist:
-17. `watchlist::enrol_persists_with_provenance`
-18. `watchlist::dedupe_by_address`
-19. `watchlist::symbol_collision_refused`
-20. `watchlist::cap_50_refusal_card`
-21. `watchlist::manual_remove_only_bot_never_auto_removes`
+18. `watchlist::enrol_persists_with_provenance`
+19. `watchlist::dedupe_by_address`
+20. `watchlist::symbol_collision_refused`
+21. `watchlist::cap_50_refusal_card`
+22. `watchlist::manual_remove_only_bot_never_auto_removes`
 
 Config:
-22. `config::valid_schema_loads_at_boot`
-23. `config::invalid_schema_fails_fast` (per-field violation cases)
-24. `config::effective_mode_observed`
+23. `config::valid_schema_loads_at_boot`
+24. `config::invalid_schema_fails_fast` (per-field violation cases)
+25. `config::effective_mode_observed`
 
 ## 4. Sample CLI outputs
 
@@ -170,7 +180,7 @@ route     v3 WETH/USDC 5bps → v2 TOKEN/WETH
 gross     2,412,880.44 TOKEN
 net       2,397,310.02 TOKEN   (tax 0.5% sell, gas 0.00042 ETH)
 impact    0.31%
-floor     TARGET 2,390,000 · SWAP 2,394,100 → min-out 2,394,100
+floor     REFERENCE 2,390,000 · SWAP 2,394,100 → min-out 2,394,100
 safety    allow
 source    chain-rpc age 3.2s · pool meta registry age 4h12m · stats age 21s
 mode      observe (no transactions sent)
@@ -181,7 +191,7 @@ $ bv route-list --sell 0x833589fC... --with 1.5 --settle USDC
 #  net(USDC out)   route                                  verdict
 1  2,397,310.02    v3 5bps → v2 TOKEN/WETH               best
 2  2,391,004.77    v2 TOKEN/WETH                         ok
-3  2,402,881.00    aerodrome volatile → v2 TOKEN/WETH    refused: fee-on-transfer multi-hop v3 leg
+3  2,402,881.00    aerodrome vol → v2 TOKEN/WETH         refused: fee-on-transfer multi-hop v3 leg
 4  —               v4 TOKEN/WETH 30bps                   refused: impact 2.4% > cap 1.5%
 ```
 
@@ -198,14 +208,19 @@ source     chain-rpc age 3.2s · stats external age 58s · negative hits 120s TT
 $ bv simulate --route 3 --sell 0x833589fC... --with 1.5
 settle     USDC  2,397,310.02
 residue    WETH 0.000000000000000000  ✓
-floor      TARGET ok · SWAP ok (fill 2,397,310 > min-out 2,394,100)
+floor      REFERENCE ok · SWAP ok (fill 2,397,310 > min-out 2,394,100)
 impact     0.31% ≤ cap 1.5%  ✓
 verdict    allow (sim only — mode observe)
 ```
 
-## 5. Delivery gates
+## 5. Deferred / non-blocking notes
 
-`cargo test` green (fork suite on VPS with `BASE_RPC_URL`), `cargo clippy
+- Static 24h cache tier is persisted to disk so restarts don't re-fetch (in S1).
+- Venue-coverage check is deferred to a later batch.
+
+## 6. Delivery gates
+
+`cargo test` green (fork suite with `BASE_RPC_URL`), `cargo clippy
 --all-targets -- -D warnings` clean, `cargo fmt --check` clean, then the S1 report:
 files, tests + counts, charter conflicts flagged. Ends with "S1 complete — awaiting
 approval for S2."
