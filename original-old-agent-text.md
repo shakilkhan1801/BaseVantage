@@ -1,7 +1,4 @@
-S1-DESIGN.md
-/workspace/basevantage/docs/
-added
-+211
+# S1-DESIGN.md /workspace/basevantage/docs/ added +211
 
 # BaseVantage — S1 Design Doc (engine core, no Telegram)
 
@@ -216,10 +213,7 @@ verdict    allow (sim only — mode observe)
 files, tests + counts, charter conflicts flagged. Ends with "S1 complete — awaiting
 approval for S2."
 
-S1-DESIGN.md
-/workspace/basevantage/docs/
-added
-+226
+# S1-DESIGN.md /workspace/basevantage/docs/ added +226
 
 # BaseVantage — S1 Design Doc (engine core, no Telegram)
 
@@ -447,3 +441,80 @@ verdict    allow (sim only — mode observe)
 --all-targets -- -D warnings` clean, `cargo fmt --check` clean, then the S1 report:
 files, tests + counts, charter conflicts flagged. Ends with "S1 complete — awaiting
 approval for S2."
+
+# config.example.toml /workspace/basevantage/ added +49
+
+# BaseVantage engine configuration. Every key is validated at boot; the engine
+# exits non-zero listing every violation before any network I/O (fail-fast).
+
+[engine]
+# observe = quote/simulate only, never sends. execute is reserved for S2+.
+mode = "observe"
+# Chain id must be 8453 (Base mainnet) for this batch.
+chain_id = 8453
+# Settlement asset for sells (address must be checksummed).
+settlement_asset = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+# Canonical wrapped-native token.
+wrapped_native = "0x4200000000000000000000000000000000000006"
+
+[rpc]
+# One or more HTTP RPC endpoints; the pool scores and benches them.
+urls = ["https://mainnet.base.org"]
+# Optional WS endpoint(s) for the event source; falls back to HTTP polling.
+ws_urls = ["wss://base-rpc.publicnode.com"]
+# Bench cadence in seconds.
+bench_interval_secs = 60
+
+[cache]
+# Tiered TTLs (seconds). Static metadata is persisted to disk across restarts.
+static_ttl_secs = 86400
+reserves_ttl_secs = 30
+stats_ttl_secs = 60
+negative_ttl_secs = 120
+# Where the static tier snapshot is persisted.
+static_store_path = "cache/static-pools.json"
+
+[safety]
+# Price-impact cap, percent. Above this, pre-send refuses.
+impact_cap_pct = 1.5
+# Floor tolerance, percent, applied to anchor-derived floors.
+floor_tolerance_pct = 0.5
+# Sell-tax above this (percent) blocks the token.
+max_sell_tax_pct = 10.0
+# Refuse fee-on-transfer tokens on multi-hop v3 hops.
+fot_multihop_v3 = "refuse"
+
+[watchlist]
+# Hard cap on entries; enrol past the cap returns a refusal card.
+cap = 50
+# Where entries persist.
+store_path = "watchlist.json"
+
+[settlement]
+# Max pin age before a pinned quote must be re-validated (seconds).
+pin_max_age_secs = 30
+
+# .gitignore /workspace/basevantage/ added +3
+/target
+cache/
+watchlist.json
+
+# README.md /workspace/basevantage/ added +17
+
+# BaseVantage
+
+Base-chain trading engine core (batch S1: chain adapter, market data, router,
+safety, watchlist, dev-harness CLI — no Telegram).
+
+Build and check:
+
+```
+cargo test                                  # unit + integration
+BASE_RPC_URL=... cargo test -- --ignored    # fork suite
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+```
+
+Dev harness: `cargo run --bin bv -- quote|route-list|dossier-data|simulate`.
+
+Design: `docs/S1-DESIGN.md`. Charter provenance: `docs/CHARTER-PENDING.md`.
