@@ -92,6 +92,63 @@ impl FloorModule {
         Ok(FloorResult { min_out, quotes })
     }
 
+    /// Buy-side mirror of [`Self::min_out`] for a target BUY order: given
+    /// `spend_raw` of the settlement asset and price anchors, the minimum
+    /// tokens (1e18 whole-unit scaled) the buy may receive. Each anchor
+    /// contributes `spend ÷ price`; the TARGET anchor is absolute — the buy
+    /// NEVER receives fewer tokens than `spend ÷ target`, so it can never pay
+    /// more than the target price. Better fills (more tokens) are fine.
+    pub fn min_tokens(&self, spend_raw: U256, anchors: &[FloorAnchor]) -> Result<FloorResult> {
+        if anchors.is_empty() {
+            return Err(EngineError::SafetyRefused(
+                "floor: no anchors available".to_string(),
+            ));
+        }
+        let e18 = U256::from(10).pow(U256::from(18));
+        let mut quotes = Vec::with_capacity(anchors.len());
+        let mut min_tokens = U256::ZERO;
+        let mut target_floor = U256::ZERO;
+
+        for anchor in anchors {
+            if anchor.price_1e18.is_zero() {
+                return Err(EngineError::SafetyRefused(
+                    "floor: zero anchor price".to_string(),
+                ));
+            }
+            // tokens_1e18 = spend × 1e18 ÷ price_1e18, floor — the exact
+            // mirror of min_out's `amount × price ÷ 1e18`.
+            let raw = mul_div_floor(spend_raw, e18, anchor.price_1e18)?;
+            let floor_tokens = match anchor.kind {
+                AnchorKind::Target => {
+                    // Absolute: never reduced by tolerance.
+                    target_floor = target_floor.max(raw);
+                    raw
+                }
+                AnchorKind::Reference | AnchorKind::Swap => {
+                    let reduced = self.apply_tolerance(raw)?;
+                    min_tokens = min_tokens.max(reduced);
+                    quotes.push(FloorQuote {
+                        kind: anchor.kind,
+                        floor_out: reduced,
+                        reduced_by_tolerance: reduced != raw,
+                    });
+                    continue;
+                }
+            };
+            quotes.push(FloorQuote {
+                kind: anchor.kind,
+                floor_out: floor_tokens,
+                reduced_by_tolerance: false,
+            });
+        }
+
+        let min_tokens = min_tokens.max(target_floor);
+        Ok(FloorResult {
+            min_out: min_tokens,
+            quotes,
+        })
+    }
+
     fn apply_tolerance(&self, raw: U256) -> Result<U256> {
         let pct = (self.tolerance_pct.clamp(0.0, 100.0) * 100.0).round() as u64; // bps
         mul_div_floor(raw, U256::from(10_000 - pct), U256::from(10_000))

@@ -247,3 +247,205 @@ pub fn offline_engine() -> (Engine, Arc<MarketData>, Arc<ScriptedChain>) {
     };
     (engine, market, chain)
 }
+
+// ------------------------------------------------------- telegram mock engine
+
+use alloy::signers::local::PrivateKeySigner;
+use basevantage::tg::port::{
+    Draft, DraftKind, EnginePort, PositionView, QuoteView, ReceiptView, TokenView,
+};
+
+/// 1e18-scaled whole units for telegram tests.
+pub fn tk(n: u64) -> alloy::primitives::U256 {
+    alloy::primitives::U256::from(n)
+        * alloy::primitives::U256::from(10).pow(alloy::primitives::U256::from(18))
+}
+
+/// Scripted engine for the telegram tests: canned views, recorded
+/// executions, and a switchable observe/execute mode.
+pub struct MockEngine {
+    pub execute_mode: std::sync::atomic::AtomicBool,
+    pub executed: std::sync::Mutex<Vec<(Draft, String)>>,
+    pub limit_met: std::sync::Mutex<Option<bool>>,
+    pub refuse: std::sync::Mutex<Option<String>>,
+    pub holdings: alloy::primitives::U256,
+}
+
+impl MockEngine {
+    pub fn new() -> Self {
+        Self {
+            execute_mode: std::sync::atomic::AtomicBool::new(false),
+            executed: std::sync::Mutex::new(Vec::new()),
+            limit_met: std::sync::Mutex::new(None),
+            refuse: std::sync::Mutex::new(None),
+            holdings: tk(15_000),
+        }
+    }
+
+    pub fn set_execute(&self, on: bool) {
+        self.execute_mode
+            .store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn execute_count(&self) -> usize {
+        self.executed.lock().unwrap().len()
+    }
+}
+
+#[async_trait::async_trait]
+impl EnginePort for MockEngine {
+    async fn token(
+        &self,
+        _token: alloy::primitives::Address,
+        _wallet: Option<alloy::primitives::Address>,
+    ) -> basevantage::error::Result<TokenView> {
+        Ok(TokenView {
+            symbol: "TOKEN".to_string(),
+            price_line: "0.00000012 USDC".to_string(),
+            pools_line: "v2 TKN/WETH 1.2M/311".to_string(),
+            dossier_line: "sell-tax 0.5% · honeypot no · FoT no".to_string(),
+            impact_line: "0.05 ETH ≈ 0.31% (cap 1.5%)".to_string(),
+            verdict_line: "allow · sources chain-rpc 3s".to_string(),
+            blocked: false,
+            block_reason: String::new(),
+            holds: self.holdings,
+        })
+    }
+
+    async fn quote(&self, draft: &Draft) -> basevantage::error::Result<QuoteView> {
+        if let Some(reason) = self.refuse.lock().unwrap().clone() {
+            return Ok(QuoteView {
+                title: draft.symbol.clone(),
+                route: "—".to_string(),
+                gross_line: "—".to_string(),
+                net_line: "—".to_string(),
+                min_out_line: "—".to_string(),
+                anchor_line: "—".to_string(),
+                impact_line: "—".to_string(),
+                verdict_ok: false,
+                refusal_reason: reason,
+                refusal_guidance: "pick a direct pool route".to_string(),
+                limit_met: None,
+            });
+        }
+        let e18 = tk(1);
+        let (amount, min_out_line, anchor_line, limit_met) = match draft.kind {
+            DraftKind::Buy { spend } => (
+                spend,
+                "2,394,100 USDC".to_string(),
+                "REFERENCE 2,390,000 · SWAP 2,394,100 -> max".to_string(),
+                None,
+            ),
+            DraftKind::Sell { amount } => (
+                amount,
+                "2,394,100 USDC".to_string(),
+                "REFERENCE 2,390,000 · SWAP 2,394,100 -> max".to_string(),
+                None,
+            ),
+            DraftKind::TargetBuy {
+                spend,
+                limit_price_1e18,
+            } => {
+                let min_tokens = spend * e18 / limit_price_1e18;
+                (
+                    spend,
+                    format!(
+                        "{} tokens (spend ÷ limit)",
+                        basevantage::tg::cards::fmt_units(&min_tokens)
+                    ),
+                    "REFERENCE · SWAP · TARGET -> max".to_string(),
+                    *self.limit_met.lock().unwrap(),
+                )
+            }
+            DraftKind::TargetSell {
+                amount,
+                limit_price_1e18,
+            } => {
+                let min_out = limit_price_1e18 * amount / e18;
+                (
+                    amount,
+                    format!(
+                        "{} (limit × amount)",
+                        basevantage::tg::cards::fmt_units(&min_out)
+                    ),
+                    "REFERENCE · SWAP · TARGET -> max".to_string(),
+                    *self.limit_met.lock().unwrap(),
+                )
+            }
+        };
+        Ok(QuoteView {
+            title: draft.symbol.clone(),
+            route: "v3 WETH/USDC 5bps -> v2 TKN/WETH".to_string(),
+            gross_line: format!("{} (gross)", basevantage::tg::cards::fmt_units(&amount)),
+            net_line: "2,397,310.02 USDC (tax 0.5%, gas 0.00042 ETH)".to_string(),
+            min_out_line,
+            anchor_line,
+            impact_line: "0.31% <= cap 1.5%".to_string(),
+            verdict_ok: true,
+            refusal_reason: String::new(),
+            refusal_guidance: String::new(),
+            limit_met,
+        })
+    }
+
+    async fn execute(
+        &self,
+        draft: &Draft,
+        _signer: &PrivateKeySigner,
+    ) -> basevantage::error::Result<ReceiptView> {
+        if !self.mode_execute() {
+            return Err(basevantage::error::EngineError::SafetyRefused(
+                "observe mode: nothing is sent".to_string(),
+            ));
+        }
+        if let Some(reason) = self.refuse.lock().unwrap().clone() {
+            return Err(basevantage::error::EngineError::SafetyRefused(reason));
+        }
+        let tx = format!("0xdeadbeef{}", self.execute_count());
+        self.executed
+            .lock()
+            .unwrap()
+            .push((draft.clone(), tx.clone()));
+        Ok(ReceiptView {
+            title: draft.symbol.clone(),
+            fill_line: "filled 2,398,120.55 USDC >= min-out 2,394,100".to_string(),
+            impact_line: "0.30% · gas 0.00043 ETH".to_string(),
+            tx_hash: tx,
+            verdict_line: "allow · filled above floor".to_string(),
+        })
+    }
+
+    async fn positions(
+        &self,
+        _wallet: alloy::primitives::Address,
+    ) -> basevantage::error::Result<Vec<PositionView>> {
+        Ok(vec![PositionView {
+            token: alloy::primitives::Address::repeat_byte(0x11),
+            symbol: "TOKEN".to_string(),
+            amount: self.holdings,
+            value_line: "18.42 USDC".to_string(),
+            pnl_line: "+2.4%".to_string(),
+        }])
+    }
+
+    async fn withdraw(
+        &self,
+        _signer: &PrivateKeySigner,
+        _to: alloy::primitives::Address,
+        _amount: alloy::primitives::U256,
+    ) -> basevantage::error::Result<String> {
+        Ok("0xwithdraw".to_string())
+    }
+
+    fn mode_execute(&self) -> bool {
+        self.execute_mode.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn settlement_symbol(&self) -> &'static str {
+        "USDC"
+    }
+
+    fn settlement(&self) -> alloy::primitives::Address {
+        alloy::primitives::Address::ZERO
+    }
+}

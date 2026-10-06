@@ -78,6 +78,75 @@ fn floor_swap_anchor_worse_fill_reverts() {
 }
 
 #[test]
+fn target_buy_floor_never_below_spend_over_target() {
+    // Buy-side mirror: a target BUY may never receive fewer tokens than
+    // spend ÷ target — it can never pay more than the target price.
+    let spend = tokens(2500); // settlement-asset units
+    let target_per_token = tokens(25) / U256::from(10); // 2.5
+    let expected = spend * tokens(1) / target_per_token; // 1000 tokens
+    let target_floor = FloorModule::new(0.0)
+        .min_tokens(spend, &[anchor(AnchorKind::Target, 2500)])
+        .unwrap()
+        .min_out;
+    assert_eq!(target_floor, expected);
+
+    // Market anchors ABOVE the target price: the target floor binds exactly.
+    for tolerance in [0.0, 0.5, 5.0, 50.0] {
+        let floor = FloorModule::new(tolerance);
+        let result = floor
+            .min_tokens(
+                spend,
+                &[
+                    anchor(AnchorKind::Reference, 3000),
+                    anchor(AnchorKind::Swap, 3200),
+                    anchor(AnchorKind::Target, 2500),
+                ],
+            )
+            .unwrap();
+        // The invariant: min tokens never fall below spend ÷ target,
+        // whatever the tolerance does to the other anchors.
+        assert!(
+            result.min_out >= target_floor,
+            "tolerance {tolerance}%: min tokens {} < target floor {target_floor}",
+            result.min_out
+        );
+        assert_eq!(result.min_out, target_floor);
+        assert!(FloorModule::check_fill(result.min_out, expected).is_ok());
+        assert!(FloorModule::check_fill(result.min_out, expected - U256::from(1)).is_err());
+    }
+
+    // Market anchors BELOW the target price make the anchor floors bind,
+    // and tolerance may relax them — but never past the market-derived floor.
+    let relaxed = FloorModule::new(5.0)
+        .min_tokens(
+            spend,
+            &[
+                anchor(AnchorKind::Reference, 2000),
+                anchor(AnchorKind::Swap, 1800),
+            ],
+        )
+        .unwrap();
+    // Without tolerance the binding anchor (1.8) implies 2500/1.8 tokens;
+    // 5% tolerance relaxes that floor downward.
+    let strict = FloorModule::new(0.0)
+        .min_tokens(
+            spend,
+            &[
+                anchor(AnchorKind::Reference, 2000),
+                anchor(AnchorKind::Swap, 1800),
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        strict.min_out,
+        spend * tokens(1) / (U256::from(18) * U256::from(E18) / U256::from(10))
+    );
+    assert!(relaxed.min_out < strict.min_out);
+    assert!(FloorModule::check_fill(relaxed.min_out, relaxed.min_out).is_ok());
+    assert!(FloorModule::check_fill(relaxed.min_out, relaxed.min_out - U256::from(1)).is_err());
+}
+
+#[test]
 fn target_order_floor_never_below_target() {
     let amount = tokens(1000);
     let target_per_token = tokens(25) / U256::from(10); // 2.5

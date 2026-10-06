@@ -238,3 +238,34 @@ impl Config {
         self.engine.wrapped_native.parse().expect("validated")
     }
 }
+
+/// Telegram-layer settings. Deliberately holds NO secrets: the bot token
+/// comes from the environment (`TELEGRAM_BOT_TOKEN`), never from a file.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelegramConfig {
+    /// Execute-mode chat allowlist; empty = engine mode governs all chats.
+    #[serde(default)]
+    pub execute_allowlist: Vec<i64>,
+    /// Seconds a review card stays confirmable.
+    #[serde(default = "default_confirm_window")]
+    pub confirm_window_secs: u64,
+}
+
+fn default_confirm_window() -> u64 {
+    60
+}
+
+impl TelegramConfig {
+    /// The bot token is environment-only by design.
+    pub fn token_from_env() -> Result<String> {
+        std::env::var("TELEGRAM_BOT_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty())
+            .ok_or_else(|| {
+                EngineError::Config(
+                    "TELEGRAM_BOT_TOKEN must come from the environment, not a file".to_string(),
+                )
+            })
+    }
+}

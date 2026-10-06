@@ -5,5 +5,6 @@ pub mod harness;
 pub mod market;
 pub mod router;
 pub mod safety;
+pub mod tg;
 pub mod venues;
 pub mod watchlist;
